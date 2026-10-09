@@ -61,6 +61,36 @@
             android:exported="false"
             android:launchMode="singleTop" />
 
+        <!-- 다른 앱에서 글을 선택하면 나오는 메뉴(PROCESS_TEXT)에 두 항목을 넣는다. -->
+        <activity
+            android:name=".process.EnhanceSelectionActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/process_enhance"
+            android:taskAffinity=""
+            android:theme="@style/SelectionDialogTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".process.ChatSelectionActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/process_chat"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/BridgeTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.PROCESS_TEXT" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
         <receiver
             android:name=".update.PackageReplacedReceiver"
             android:exported="false">

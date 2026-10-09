@@ -8,6 +8,14 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
+    <!-- 텍스트 선택 메뉴의 `글 강화` 창: 보던 앱 위에 뜨는 작은 어두운 창. -->
+    <style name="SelectionDialogTheme" parent="android:style/Theme.Material.Dialog.NoActionBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowCloseOnTouchOutside">false</item>
+        <item name="android:colorAccent">#7962DB</item>
+        <item name="android:backgroundDimAmount">0.45</item>
+    </style>
+
     <style name="BridgeTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:windowIsTranslucent">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>

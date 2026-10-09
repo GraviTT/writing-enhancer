@@ -199,6 +199,21 @@ internal class SideChatScreen(
         render()
     }
 
+    /** 다른 앱에서 선택한 글을 입력칸에 넣고, 이어서 질문을 쓰도록 키보드와 함께 연다. */
+    fun startWithDraft(text: String) {
+        if (busy) {
+            open()
+            return
+        }
+        draft = text
+        host.retainedDraft = text
+        editingMessageId = ""
+        clearConfirmation = false
+        error = ""
+        keepKeyboard = true
+        render()
+    }
+
     /** 패널이 다른 화면을 그리기 전에 채팅 화면의 뷰 참조를 놓는다. */
     fun forgetViews() {
         input = null

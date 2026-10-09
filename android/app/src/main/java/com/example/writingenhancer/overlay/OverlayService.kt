@@ -184,7 +184,8 @@ class OverlayService : Service() {
             stopBubble()
             return START_NOT_STICKY
         }
-        if (action == ACTION_START) {
+        // 다른 앱의 텍스트 선택 메뉴에서 연 요청도 사용자가 직접 버블을 켠 것으로 본다.
+        if (action == ACTION_START || action == ACTION_OPEN_HISTORY || action == ACTION_OPEN_CHAT_TEXT) {
             stopping = false
             setMarkedRunning(this, true)
         }
@@ -204,6 +205,8 @@ class OverlayService : Service() {
         if (bubble == null) showBubble()
         when (intent?.action) {
             ACTION_OPEN -> showPanel()
+            ACTION_OPEN_HISTORY -> openHistoryFromSelection(intent.getStringExtra(EXTRA_HISTORY_ID))
+            ACTION_OPEN_CHAT_TEXT -> openChatFromSelection(intent.getStringExtra(EXTRA_TEXT))
             ACTION_RESIZE_BUBBLE -> applyBubbleSize()
             ACTION_ATTACHMENT_RESULT -> receiveAttachment(intent)
             ACTION_CAPTURE_CANCELLED -> {
@@ -403,6 +406,29 @@ class OverlayService : Service() {
                     Toast.LENGTH_SHORT,
                 ).show()
             }
+    }
+
+    // 텍스트 선택 메뉴의 `글 강화`에서 만든 결과를 버블 창에서 이어서 다듬는다.
+    private fun openHistoryFromSelection(historyId: String?) {
+        val entry = historyId?.let(workspaceStore::getHistory)
+        if (entry == null) {
+            Toast.makeText(this, "강화한 글을 찾지 못했어요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        session.loadHistory(entry)
+        persistDraft()
+        lastPanelSurface = PanelSurface.WRITING
+        val current = panel
+        if (current == null) showPanel() else current.showWritingResult()
+    }
+
+    // 텍스트 선택 메뉴의 `글 강화기 채팅`: 선택한 글을 채팅 입력칸에 넣고 사이드 채팅을 연다.
+    private fun openChatFromSelection(draft: String?) {
+        if (draft.isNullOrBlank()) return
+        retainedChatDraft = draft
+        lastPanelSurface = PanelSurface.SIDE_CHAT
+        showPanel()
+        panel?.openSideChatWithDraft(draft)
     }
 
     private fun stopBubble() {
@@ -1587,6 +1613,21 @@ class OverlayService : Service() {
                 chatReturnScreen = screenState
             }
             sideChat.open()
+        }
+
+        fun openSideChatWithDraft(draft: String) {
+            if (closed || !::root.isInitialized) return
+            syncInputs()
+            persistDraft()
+            if (screenState != PanelScreenState.CHAT) {
+                chatReturnScreen = screenState
+            }
+            sideChat.startWithDraft(draft)
+        }
+
+        fun showWritingResult() {
+            if (closed || !::root.isInitialized) return
+            renderStoredResult()
         }
 
         private fun sideChatWritingSummary(): String = when {
@@ -2938,7 +2979,7 @@ class OverlayService : Service() {
             maxRows: Int,
             textSizeSp: Float,
             showEditTools: Boolean = true,
-            nativeEditMenu: Boolean = false,
+            nativeEditMenu: Boolean = true,
         ) = PasteFriendlyEditText(
             this@OverlayService,
             minRows,
@@ -3175,6 +3216,9 @@ class OverlayService : Service() {
         const val ACTION_START = "com.example.writingenhancer.action.START"
         const val ACTION_STOP = "com.example.writingenhancer.action.STOP"
         const val ACTION_OPEN = "com.example.writingenhancer.action.OPEN"
+        const val ACTION_OPEN_HISTORY = "com.example.writingenhancer.action.OPEN_HISTORY"
+        const val ACTION_OPEN_CHAT_TEXT = "com.example.writingenhancer.action.OPEN_CHAT_TEXT"
+        const val EXTRA_HISTORY_ID = "history_id"
         const val ACTION_RESIZE_BUBBLE = "com.example.writingenhancer.action.RESIZE_BUBBLE"
         const val ACTION_ATTACHMENT_RESULT =
             "com.example.writingenhancer.action.ATTACHMENT_RESULT"

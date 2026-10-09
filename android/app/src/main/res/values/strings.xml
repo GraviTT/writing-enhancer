@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">글 강화기</string>
+    <string name="process_enhance">글 강화</string>
+    <string name="process_chat">글 강화기 채팅</string>
     <string name="remove_bubble_target">×\n여기로 옮기면 종료</string>
     <string name="bubble_size_format">버블 크기 · %1$d</string>
     <string name="memory_count_format">저장된 기억 · %1$d개</string>

@@ -22,7 +22,8 @@ class PasteFriendlyEditText(
     maxRows: Int,
     private val onBack: (() -> Unit)? = null,
     private val onEditMenuRequested: (PasteFriendlyEditText) -> Unit,
-    private val useNativeActionMode: Boolean = false,
+    // 길게 누르면 Android 기본 복사·붙여넣기 메뉴를 띄운다. false면 기본 메뉴 대신 앱 자체 편집 메뉴를 연다.
+    private val useNativeActionMode: Boolean = true,
 ) : EditText(context) {
     private val undoHistory = EditorUndoHistory()
     private var beforeEdit: EditorSnapshot? = null
