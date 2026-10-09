@@ -462,7 +462,8 @@ object UserDirectivePolicy {
 // 사이드 채팅 요청 글은 shared/rules의 공통 틀을 채워 만든다. Windows와 글자 단위로 같아야
 // 하며 SharedSideChatCasesTest가 이를 확인한다.
 object SideChatPromptBuilder {
-    private val placeholder = Regex("\\{(\\w+)}")
+    // Android 기기의 ICU 정규식은 짝 없는 }를 문법 오류로 보므로 양쪽 중괄호를 모두 escape한다.
+    private val placeholder = Regex("""\{(\w+)\}""")
 
     // {이름} 자리를 한 번에 바꾼다. 넣은 값 안의 중괄호는 다시 해석하지 않는다.
     fun fillTemplate(template: String, values: Map<String, String>): String =
