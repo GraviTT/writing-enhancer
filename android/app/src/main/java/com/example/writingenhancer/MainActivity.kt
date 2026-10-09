@@ -17,6 +17,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.writingenhancer.memory.MemoryStore
 import com.example.writingenhancer.overlay.OverlayService
+import com.example.writingenhancer.update.AppUpdater
 import com.example.writingenhancer.security.SecureStore
 import com.example.writingenhancer.ui.SettingsPanel
 import com.example.writingenhancer.ui.Ui
@@ -49,7 +50,16 @@ class MainActivity : Activity() {
         if (startAfterPermission && Settings.canDrawOverlays(this)) {
             startAfterPermission = false
             startBubble()
+        } else if (
+            OverlayService.isMarkedRunning(this) && !OverlayService.isAlive &&
+            Settings.canDrawOverlays(this)
+        ) {
+            // 업데이트 등으로 서비스가 끝났는데 켜 둔 표시만 남은 경우, 사용자가 켜 둔 버블을 다시 띄운다.
+            startForegroundService(
+                Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_START),
+            )
         }
+        AppUpdater.checkInBackground(this)
         updateState()
     }
 

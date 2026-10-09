@@ -62,7 +62,7 @@ Windows와 Android 앱이 모두 구현되어 있습니다.
 
 ### Windows
 
-1. [`desktop/dist/Writing-Enhancer-0.6.0-portable.zip`](desktop/dist/Writing-Enhancer-0.6.0-portable.zip)을 풉니다.
+1. [최신 릴리스](https://github.com/GraviTT/writing-enhancer/releases/latest)의 `Writing-Enhancer-<버전>-portable.zip`을 받아 풉니다. 이 PC에서 직접 만들었다면 `desktop/dist/`에 있습니다.
 2. 폴더 안의 `글 강화기.exe`를 실행합니다.
 3. 작은 톱니 버튼에서 OpenAI 또는 Gemini API 키를 입력합니다.
 
@@ -97,7 +97,7 @@ PC의 결과 생성도 직접 입력한 상황·문체·구조·목적을 기본
 
 ### Android
 
-1. [`android/WritingEnhancer-debug.apk`](android/WritingEnhancer-debug.apk)를 기기에 설치합니다.
+1. [최신 릴리스](https://github.com/GraviTT/writing-enhancer/releases/latest)의 `WritingEnhancer-<버전>.apk`를 기기에 설치합니다. 이 PC에서 직접 만들었다면 `android/WritingEnhancer-debug.apk`입니다.
 2. 앱의 설명을 확인한 뒤 `화면 위에 표시` 권한을 허용합니다.
 3. 작은 톱니 버튼에서 OpenAI 또는 Gemini API 키를 입력하고 `버블 시작`을 누릅니다.
 
@@ -165,6 +165,42 @@ Windows와 Android 사이드 채팅에 같은 규칙을 적용합니다.
 - **진행 표시와 중단.** 답변을 기다리는 동안 `답변을 준비하는 중`, `웹에서 찾아보는 중`,
   `다른 AI로 다시 시도하는 중`과 경과 시간을 보여 주고, 보내기 버튼이 `중단`으로
   바뀝니다. 중단하면 진행 중인 연결을 끊고 입력한 메시지를 입력칸에 되돌립니다.
+
+## 자동 업데이트 (0.6.1)
+
+두 앱 모두 이 저장소의 [최신 릴리스](https://github.com/GraviTT/writing-enhancer/releases/latest)를
+확인해 새 버전이 있으면 알려 줍니다. 0.6.1을 한 번 직접 설치하면 그 뒤로는 알림을 눌러 업데이트합니다.
+
+- **Windows.** 실행하고 15초 뒤, 그 뒤로는 6시간마다 확인합니다. 새 버전이 있으면 Windows 알림,
+  창 위쪽 `업데이트` 버튼, 트레이 메뉴 `업데이트 설치`로 알립니다. 누르면 휴대용 ZIP을 받아
+  SHA-256 검사 값을 맞춰 보고, 앱을 닫은 뒤 같은 폴더의 파일을 바꿔 다시 실행합니다. 작성 중인
+  글은 닫기 전에 저장하고, 기록·설정·기억은 앱 폴더 밖(`%APPDATA%`)에 있어 그대로 남습니다.
+  트레이 메뉴 `업데이트 확인`으로 바로 확인할 수도 있습니다. 설치 기록은
+  `%TEMP%\writing-enhancer-update\install-update.log`에 남습니다.
+- **Android.** 버블이 켜질 때와 앱을 열 때 확인하고, 6시간에 한 번까지만 확인합니다. 새 버전 알림을
+  누르면 APK를 받아 검사 값을 맞춰 본 뒤 시스템 설치 화면을 엽니다. 처음 한 번은 이 앱의
+  `출처를 알 수 없는 앱 설치`를 허용해야 하고, 스토어 밖 설치라 업데이트마다 시스템의 `업데이트`를
+  한 번 눌러야 합니다. 업데이트가 끝나면 켜 두었던 버블이 자동으로 다시 뜹니다.
+- 받는 주소는 이 저장소의 릴리스 다운로드 주소만 허용하고, 검사 값이 다르면 받은 파일을 지웁니다.
+
+### 새 버전 배포하기
+
+```bash
+node scripts/bump-version.cjs patch
+```
+
+두 앱 버전을 함께 올린 뒤 커밋해 main에 푸시하면, [배포 작업](.github/workflows/release.yml)이
+`v<버전>` 릴리스가 아직 없을 때만 Windows ZIP·Android APK·`SHA256SUMS.txt`를 만들어 올립니다.
+버전을 올리지 않은 푸시는 배포하지 않습니다.
+
+처음 한 번 필요한 설정:
+
+1. 저장소를 공개로 바꿉니다(앱이 비밀번호 없이 릴리스를 확인하려면 필요합니다).
+2. Android APK는 지금 설치된 앱과 같은 키로 서명해야 덮어 설치됩니다. 이 PC에서
+   `android/scripts/copy-signing-key.ps1`을 실행하면 키가 클립보드에 복사되고, GitHub
+   Settings → Secrets and variables → Actions에 `ANDROID_SIGNING_KEYSTORE_BASE64`로 붙여 넣습니다.
+   배포 작업은 APK의 서명 인증서가 [`android/signing-certificate.sha256`](android/signing-certificate.sha256)과
+   다르면 배포하지 않습니다.
 
 ## 답변 스트리밍·문장 출처·요청 분류 (0.6.0)
 

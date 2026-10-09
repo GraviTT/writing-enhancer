@@ -76,6 +76,9 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
     subscribe("side-chat:writing-context-updated", callback),
   onSideChatProgress: (callback) => subscribe("side-chat:progress", callback),
   onSideChatDelta: (callback) => subscribe("side-chat:delta", callback),
+  getUpdateState: () => ipcRenderer.invoke("update:state"),
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  onUpdateState: (callback) => subscribe("update:state", callback),
   onSideChatWritingAction: (callback) =>
     subscribe("side-chat:writing-action", callback)
 });

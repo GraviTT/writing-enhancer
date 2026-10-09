@@ -11,6 +11,7 @@ const elements = Object.fromEntries(
     "panelDragHandle",
     "collapseButton",
     "chatButton",
+    "updateButton",
     "settingsButton",
     "historyButton",
     "newButton",
@@ -208,8 +209,38 @@ function focusWritingInput() {
 
 window.writingPanel = {
   showSurface,
-  currentSurface: () => state.surface
+  currentSurface: () => state.surface,
+  // 업데이트로 앱을 닫기 직전 작성 중인 글을 저장한다.
+  flushDraft: async () => {
+    window.clearTimeout(state.draftTimer);
+    await api.saveDraft(draftPayload());
+    return true;
+  }
 };
+
+// 새 버전 알림 버튼. 누르면 받아서 설치하고 앱을 다시 시작한다.
+function renderUpdateState(update) {
+  const button = elements.updateButton;
+  const status = update?.status || "idle";
+  const visible = ["available", "downloading", "installing", "error"].includes(status) && update?.version;
+  button.classList.toggle("is-hidden", !visible);
+  if (!visible) return;
+  button.disabled = status === "downloading" || status === "installing";
+  button.classList.toggle("is-error", status === "error");
+  button.textContent =
+    status === "downloading"
+      ? `받는 중 ${update.progress || 0}%`
+      : status === "installing"
+        ? "다시 시작 중…"
+        : status === "error"
+          ? "업데이트 다시 시도"
+          : "업데이트";
+  button.title =
+    status === "error"
+      ? update.message || "업데이트하지 못했어요."
+      : `${update.version} 버전으로 업데이트하고 다시 시작해요. 작성 중인 글은 그대로 남아요.`;
+  button.setAttribute("aria-label", button.title);
+}
 
 function showToast(message, options = {}) {
   window.clearTimeout(state.toastTimer);
@@ -976,6 +1007,9 @@ elements.collapseButton.addEventListener("click", () => api.collapsePanel());
 elements.chatButton.addEventListener("click", () => {
   showSurface(state.surface === "chat" ? "writing" : "chat");
 });
+elements.updateButton.addEventListener("click", () => api.installUpdate());
+api.onUpdateState(renderUpdateState);
+api.getUpdateState().then(renderUpdateState).catch(() => {});
 elements.situationToggle.addEventListener("click", () => {
   const expanded = elements.situationSection.classList.contains("is-hidden");
   setCollapsible(elements.situationSection, elements.situationToggle, expanded, "상황");

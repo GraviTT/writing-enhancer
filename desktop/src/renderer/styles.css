@@ -1467,3 +1467,31 @@ textarea {
   background: var(--purple-soft);
   color: var(--purple-dark);
 }
+
+.update-button {
+  height: 26px;
+  margin-right: 4px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: #6d5ce7;
+  color: #ffffff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.update-button:hover:not(:disabled) {
+  background: #5b4bd6;
+}
+
+.update-button:disabled {
+  background: #a59ce6;
+  cursor: default;
+}
+
+.update-button.is-error {
+  background: #b5485a;
+}

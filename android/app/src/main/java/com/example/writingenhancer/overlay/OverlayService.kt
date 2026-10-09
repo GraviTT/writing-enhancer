@@ -81,6 +81,7 @@ import com.example.writingenhancer.ui.UiIcon
 import com.example.writingenhancer.ui.UiIconDrawable
 import com.example.writingenhancer.ui.Ui.dp
 import com.example.writingenhancer.ui.WindowDragTouchListener
+import com.example.writingenhancer.update.AppUpdater
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -115,8 +116,17 @@ class OverlayService : Service() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val session = Session()
 
+    // 버블이 떠 있는 동안 몇 시간마다 새 버전을 확인한다(실제 확인은 AppUpdater가 6시간에 한 번으로 줄인다).
+    private val updateCheck = object : Runnable {
+        override fun run() {
+            AppUpdater.checkInBackground(this@OverlayService)
+            mainHandler.postDelayed(this, UPDATE_CHECK_INTERVAL_MS)
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
+        isAlive = true
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         secureStore = SecureStore(this)
         memoryStore = MemoryStore(secureStore)
@@ -165,6 +175,7 @@ class OverlayService : Service() {
             }
         }
         startAsForeground()
+        mainHandler.postDelayed(updateCheck, UPDATE_FIRST_CHECK_MS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -261,6 +272,8 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        isAlive = false
+        mainHandler.removeCallbacks(updateCheck)
         stopping = true
         request?.cancel(true)
         request = null
@@ -3193,6 +3206,13 @@ class OverlayService : Service() {
         private const val LONG_PRESS_MS = 450L
         private const val DRAFT_DEBOUNCE_MS = 350L
         private const val SIDE_CHAT_CAPTURE_STALE_MS = 10L * 60L * 1000L
+        private const val UPDATE_FIRST_CHECK_MS = 15_000L
+        private const val UPDATE_CHECK_INTERVAL_MS = 60L * 60L * 1000L
+
+        /** 이 프로세스에서 서비스가 실제로 떠 있는지. 업데이트로 프로세스가 바뀌면 false로 시작한다. */
+        @Volatile
+        var isAlive = false
+            private set
 
         fun isMarkedRunning(context: Context): Boolean =
             context.getSharedPreferences(STATE_PREFS, Context.MODE_PRIVATE)

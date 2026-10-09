@@ -14,6 +14,7 @@ const {
   ipcMain,
   Menu,
   nativeImage,
+  Notification,
   safeStorage,
   screen,
   shell,
@@ -35,6 +36,7 @@ const { HistoryStore } = require("./lib/history-store");
 const { groundMemoryCandidates } = require("./lib/memory-grounding");
 const { MemoryStore } = require("./lib/memory-store");
 const { SideChatStore } = require("./lib/side-chat-store");
+const { UpdateManager, updatableInstall } = require("./lib/updater");
 const chatAnswer = require("./renderer/chat-answer");
 const enhancementLevels = require("./renderer/enhancement-levels");
 const {
@@ -60,6 +62,9 @@ let historyStore;
 let draftStore;
 let sideChatStore;
 let aiClient;
+let updateManager = null;
+// 알림 객체를 잡아 두지 않으면 누르기 전에 정리될 수 있다.
+let updateNotification = null;
 let isExpanded = false;
 let isQuitting = false;
 let autoCollapseSuppressedUntil = 0;
@@ -562,7 +567,7 @@ async function captureQaScreens() {
   await captureChat("window.__sideChatQa?.showStreamingDemo()", "v5-04-side-chat-streaming.png");
   await mainWindow.webContents.executeJavaScript('window.writingPanel?.showSurface("writing")');
   setPanelState(true, { focus: false, remember: false });
-  await setQa("opacity-min");  setPanelState(true, { focus: false, remember: false });
+  setPanelState(true, { focus: false, remember: false });
   await setQa("opacity-min");
   await capture("v3-10-opacity-min-readability.png");
 
@@ -587,11 +592,29 @@ function registerInitialShortcut(preferred) {
   return shortcutStatus;
 }
 
-function createTray() {
-  tray = new Tray(createTrayIcon());
-  tray.setToolTip("글 강화기");
+function updateMenuItems() {
+  if (!updateManager?.enabled) return [];
+  const { status, version, progress } = updateManager.state;
+  if (status === "downloading") {
+    return [{ label: `업데이트 받는 중 ${progress}%`, enabled: false }, { type: "separator" }];
+  }
+  if (status === "installing") {
+    return [{ label: "업데이트 설치 중…", enabled: false }, { type: "separator" }];
+  }
+  if (status === "available" || (status === "error" && version)) {
+    return [
+      { label: `업데이트 설치 (${version})`, click: () => updateManager.install() },
+      { type: "separator" }
+    ];
+  }
+  return [{ label: "업데이트 확인", click: () => checkForUpdatesNow() }, { type: "separator" }];
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
   tray.setContextMenu(
     Menu.buildFromTemplate([
+      ...updateMenuItems(),
       { label: "열기 / 접기", click: togglePanel },
       {
         label: "히스토리",
@@ -621,7 +644,62 @@ function createTray() {
       }
     ])
   );
+}
+
+function createTray() {
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip("글 강화기");
+  refreshTrayMenu();
   tray.on("click", togglePanel);
+  tray.on("balloon-click", () => updateManager?.install());
+}
+
+function showUpdateNotification(update) {
+  const title = `글 강화기 ${update.version} 업데이트가 있어요`;
+  const body = "눌러서 바로 업데이트하세요. 작성 중인 글과 기록은 그대로 남아요.";
+  if (Notification.isSupported()) {
+    updateNotification = new Notification({ title, body });
+    updateNotification.on("click", () => updateManager?.install());
+    updateNotification.show();
+  } else {
+    tray?.displayBalloon({ title, content: body });
+  }
+}
+
+async function checkForUpdatesNow() {
+  const update = await updateManager?.check();
+  if (!update) {
+    tray?.displayBalloon({ title: "글 강화기", content: `지금 쓰는 ${app.getVersion()}이 최신 버전이에요.` });
+  }
+}
+
+// 업데이트 설치 직전, 작성 중인 글을 저장하고 앱을 닫는다. 설치 스크립트가 끝나면 다시 실행한다.
+async function quitForUpdate() {
+  try {
+    await mainWindow?.webContents.executeJavaScript("window.writingPanel?.flushDraft?.()");
+  } catch {
+    // 창이 이미 닫혔으면 저장할 내용도 없다.
+  }
+  isQuitting = true;
+  app.quit();
+}
+
+function startUpdateChecks() {
+  const directory = updatableInstall({ execPath: process.execPath, isPackaged: app.isPackaged });
+  updateManager = new UpdateManager({
+    currentVersion: app.getVersion(),
+    fetchImpl: (url, options) => globalThis.fetch(url, options),
+    tempDirectory: app.getPath("temp"),
+    install: directory ? { directory, execPath: process.execPath, pid: process.pid } : null,
+    notify: showUpdateNotification,
+    onState: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("update:state", state);
+      refreshTrayMenu();
+    },
+    quit: quitForUpdate
+  });
+  updateManager.start();
+  refreshTrayMenu();
 }
 
 function safeError(error) {
@@ -1148,6 +1226,11 @@ function registerIpcHandlers() {
   ipcMain.handle("draft:save", (_event, draft) => draftStore.save(draft));
   ipcMain.handle("draft:clear", () => ({ cleared: draftStore.clear() }));
 
+  ipcMain.handle("update:state", () => ({
+    enabled: Boolean(updateManager?.enabled),
+    ...(updateManager?.state ?? { status: "idle" })
+  }));
+  ipcMain.handle("update:install", () => updateManager?.install() ?? false);
   ipcMain.handle("settings:get", () => ({
     ...configStore.getPublicSettings(),
     memoryCount: memoryStore.list().length,
@@ -1239,6 +1322,8 @@ function registerIpcHandlers() {
 }
 
 async function initialize() {
+  // Windows 알림에 앱 이름을 붙이고 알림을 눌렀을 때 이 앱으로 돌아오게 한다.
+  if (process.platform === "win32") app.setAppUserModelId("com.writingenhancer.desktop");
   const userData = app.getPath("userData");
   configStore = new ConfigStore(path.join(userData, "settings.json"), safeStorage);
   memoryStore = new MemoryStore(path.join(userData, "memories.json"));
@@ -1353,6 +1438,7 @@ async function initialize() {
   } else {
     createTray();
     registerInitialShortcut(configStore.getShortcut());
+    startUpdateChecks();
   }
 }
 
