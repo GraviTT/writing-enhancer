@@ -4,9 +4,11 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 
+const sideChatRules = require("../renderer/side-chat-rules");
+
 const MAX_MESSAGES = 60;
-const MAX_SOURCES = 6;
-const MAX_RELATED_QUERIES = 3;
+const MAX_SOURCES = sideChatRules.limits.webSources;
+const MAX_RELATED_QUERIES = sideChatRules.limits.relatedQueries;
 
 function cleanText(value, maximum) {
   return String(value ?? "").replace(/\u0000/gu, "").slice(0, maximum).trim();
@@ -41,7 +43,7 @@ function normalizeRelatedQueries(values) {
   const queries = [];
   const seen = new Set();
   for (const value of Array.isArray(values) ? values : []) {
-    const query = cleanText(value, 140);
+    const query = cleanText(value, sideChatRules.limits.relatedQueryCharacters);
     const key = query.toLocaleLowerCase("ko-KR");
     if (!query || seen.has(key)) continue;
     seen.add(key);

@@ -1,0 +1,73 @@
+# main에 올리거나 PR을 열 때마다 공통 규칙·Windows·Android 검사를 자동으로 실행한다.
+# 실제 AI API는 부르지 않으며 API 키도 필요하지 않다.
+name: 검증
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  shared-and-windows:
+    name: 공통 규칙 · Windows 앱
+    runs-on: windows-latest
+    env:
+      # 테스트는 Electron 실행 파일을 쓰지 않으므로 내려받지 않는다.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            shared/package-lock.json
+            desktop/package-lock.json
+
+      - name: 공통 규칙·계약 테스트 (생성 파일 최신 여부 포함)
+        working-directory: shared
+        run: |
+          npm ci
+          npm test
+
+      - name: Windows 앱 테스트
+        working-directory: desktop
+        run: |
+          npm ci
+          npm test
+
+  android:
+    name: Android 앱
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: 단위 테스트 · lint · 디버그 APK 빌드
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew test lintDebug assembleDebug
+
+      - name: lint 이슈 0개 확인
+        working-directory: android
+        run: |
+          # 바깥 <issues> 태그는 빼고 개별 <issue> 항목만 센다.
+          count=$(grep -cE '<issue([[:space:]]|>|$)' app/build/reports/lint-results-debug.xml || true)
+          echo "lint 이슈: ${count}개"
+          test "${count}" -eq 0

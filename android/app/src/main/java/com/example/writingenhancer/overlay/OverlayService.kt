@@ -64,6 +64,7 @@ import com.example.writingenhancer.ai.SideChatProgress
 import com.example.writingenhancer.ai.SideChatRequest
 import com.example.writingenhancer.ai.SideChatSearchPolicy
 import com.example.writingenhancer.ai.SideChatWritingContext
+import com.example.writingenhancer.ai.SharedSideChatRules
 import com.example.writingenhancer.ai.WebSource
 import com.example.writingenhancer.capture.BridgeActivity
 import com.example.writingenhancer.capture.ImageCropActivity
@@ -1894,7 +1895,9 @@ class OverlayService : Service() {
                 background = Ui.rounded(Ui.ACCENT_SURFACE, 16, this@OverlayService)
                 contentDescription = "제안 적용 확인"
             }
-            card.addView(Ui.label(this@OverlayService, "이 변경을 적용할까요?", 14f, Ui.PANEL_TEXT, true))
+            card.addView(
+                Ui.label(this@OverlayService, SharedSideChatRules.PENDING_TITLE, 14f, Ui.PANEL_TEXT, true),
+            )
             card.addView(
                 Ui.label(
                     this@OverlayService,
@@ -1922,7 +1925,7 @@ class OverlayService : Service() {
             card.addView(
                 Ui.label(
                     this@OverlayService,
-                    "검색·화면 자료가 섞인 대화라 내용을 확인한 뒤 적용해요.",
+                    SharedSideChatRules.PENDING_NOTE,
                     11f,
                     Ui.PANEL_MUTED,
                 ).apply { setPadding(0, dp(8), 0, dp(8)) },
@@ -1969,7 +1972,7 @@ class OverlayService : Service() {
         private fun dismissPendingChatAction() {
             if (pendingChatAction == null) return
             pendingChatAction = null
-            chatScreenNotice = "제안을 적용하지 않았어요."
+            chatScreenNotice = SharedSideChatRules.PENDING_DISMISSED
             renderSideChat()
         }
 
@@ -2003,7 +2006,7 @@ class OverlayService : Service() {
             chatSearchMode = chatActiveForceSearch
             chatPendingUser = ""
             chatError = ""
-            chatScreenNotice = "답변을 중단했어요."
+            chatScreenNotice = SharedSideChatRules.CANCELLED
             renderSideChat()
         }
 
@@ -2471,9 +2474,9 @@ class OverlayService : Service() {
             chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
             chatSearchMode = !chatSearchMode
             chatScreenNotice = if (chatSearchMode) {
-                "다음 질문은 웹에서 찾아보고 답해요."
+                SharedSideChatRules.SEARCH_MODE_ON
             } else {
-                "검색은 AI가 필요할 때만 사용해요."
+                SharedSideChatRules.SEARCH_MODE_OFF
             }
             keepChatKeyboard = focusedEditor() === chatInput || imeVisible
             renderSideChat()

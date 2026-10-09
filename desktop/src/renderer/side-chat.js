@@ -2,6 +2,8 @@
 
 const api = window.writingEnhancer;
 const cropPolicy = window.visualCrop;
+// 진행 표시·적용 카드 문구는 shared/rules에서 Android와 함께 쓴다.
+const chatText = window.sideChatText;
 const elements = Object.fromEntries(
   [
     "sideChatDragHandle",
@@ -389,44 +391,15 @@ async function cancelReply() {
 function progressLabelText() {
   const progress = state.progress;
   if (!progress) return "AI가 답변 중";
-  const base =
-    progress.stage === "fallback"
-      ? "다른 AI로 다시 시도하는 중"
-      : progress.searchPolicy === "required"
-        ? "웹에서 찾아보는 중"
-        : "답변을 준비하는 중";
-  const seconds = Math.floor((Date.now() - progress.startedAt) / 1_000);
-  return seconds >= 3 ? `${base} · ${seconds}초` : base;
+  return chatText.progressLabel(
+    { stage: progress.stage, searchRequired: progress.searchPolicy === "required" },
+    Date.now() - progress.startedAt
+  );
 }
 
 function updateProgressLabel() {
   const label = elements.messageList.querySelector(".typing-label");
   if (label) label.textContent = progressLabelText();
-}
-
-const PENDING_ACTION_LABELS = Object.freeze({
-  replace_source: "원문을 이 내용으로 바꾸기",
-  set_situation: "상황 안내를 이 내용으로 바꾸기",
-  replace_result: "이 내용을 새 결과 버전으로 추가",
-  set_follow_up_reply: "후속 요구 입력란에 넣기",
-  enhance: "지금 원문으로 완성하기",
-  reenhance: "원문 기준으로 다시 강화하기",
-  copy_result: "강화한 글 복사하기",
-  new_writing: "현재 작업을 비우고 새 글 시작",
-  guess_intent: "알아맞춰 봐 실행"
-});
-const PENDING_ACTIONS_WITH_TEXT = new Set([
-  "replace_source",
-  "set_situation",
-  "replace_result",
-  "set_follow_up_reply"
-]);
-
-function pendingActionLabel(action) {
-  if (action.name === "set_enhancement_level") {
-    return `강화 범위를 ${action.value || "?"}단계로 바꾸기`;
-  }
-  return PENDING_ACTION_LABELS[action.name] || "글 강화기 동작 실행";
 }
 
 function createPendingActionCard(action) {
@@ -435,20 +408,20 @@ function createPendingActionCard(action) {
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", "제안 적용 확인");
   const title = document.createElement("strong");
-  title.textContent = "이 변경을 적용할까요?";
+  title.textContent = chatText.labels.pendingTitle;
   const label = document.createElement("span");
   label.className = "pending-action-label";
-  label.textContent = pendingActionLabel(action);
+  label.textContent = chatText.pendingActionLabel(action);
   card.append(title, label);
-  const value = String(action.value || "");
-  if (PENDING_ACTIONS_WITH_TEXT.has(action.name) && value.trim()) {
+  const previewText = chatText.pendingActionPreview(action);
+  if (previewText) {
     const preview = document.createElement("div");
     preview.className = "pending-action-preview";
-    preview.textContent = value.length > 600 ? `${value.slice(0, 600)}…` : value;
+    preview.textContent = previewText;
     card.append(preview);
   }
   const note = document.createElement("p");
-  note.textContent = "검색·화면 자료가 섞인 대화라 내용을 확인한 뒤 적용해요.";
+  note.textContent = chatText.labels.pendingNote;
   const buttons = document.createElement("div");
   buttons.className = "pending-action-buttons";
   const dismiss = document.createElement("button");
@@ -492,7 +465,7 @@ async function dismissPendingAction() {
   } catch {
     // 보관된 제안은 다음 요청에서 어차피 폐기된다.
   }
-  showToast("제안을 적용하지 않았어요.");
+  showToast(chatText.labels.pendingDismissed);
   focusChatInput();
 }
 
@@ -635,7 +608,7 @@ function renderMessages({ pendingUser = "", typing = false } = {}) {
     if (message.role === "assistant" && message.sourcesMissing === true) {
       const note = document.createElement("p");
       note.className = "message-note";
-      note.textContent = "웹 출처를 확인하지 못한 답변이에요. 중요한 내용은 직접 확인해 주세요.";
+      note.textContent = chatText.labels.sourcesMissingNote;
       bubble.append(note);
     }
     const sourceList = message.role === "assistant" ? createSourceList(message) : null;
@@ -921,11 +894,7 @@ elements.searchModeButton.addEventListener("click", () => {
   if (state.busy || state.capturingScreen) return;
   state.searchMode = !state.searchMode;
   updateScreenContextUi();
-  showToast(
-    state.searchMode
-      ? "다음 질문은 웹에서 찾아보고 답해요."
-      : "검색은 AI가 필요할 때만 사용해요."
-  );
+  showToast(state.searchMode ? chatText.labels.searchModeOn : chatText.labels.searchModeOff);
   focusChatInput();
 });
 elements.visualPreviewOpenButton.addEventListener("click", openCropDialog);

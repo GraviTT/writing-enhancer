@@ -9,7 +9,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && tsx --test test/*.test.ts"
+    "rules": "node scripts/generate-rules.cjs",
+    "rules:check": "node scripts/generate-rules.cjs --check",
+    "test": "npm run typecheck && tsx --test test/*.test.ts && npm run rules:check"
   },
   "devDependencies": {
     "@types/node": "^24.1.0",

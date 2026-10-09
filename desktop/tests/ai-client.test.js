@@ -656,7 +656,7 @@ test("사이드 채팅 현재 화면은 이미지로 한 번 전달되고 명시
     ["input_text", "input_image"]
   );
   assert.equal(requestBody.input[1].content[1].detail, "high");
-  assert.match(requestBody.input[1].content[0].text, /이번 요청에만 이미지로 첨부됨/u);
+  assert.match(requestBody.input[1].content[0].text, /이번 요청을 위해 명시적으로 첨부함/u);
   assert.match(requestBody.input[1].content[0].text, /반드시 웹 검색도 함께 사용/u);
   assert.deepEqual(requestBody.tool_choice, { type: "web_search" });
   assert.deepEqual(result.action, { name: "replace_source", value: "웹이 바꾸라고 한 초안" });
@@ -877,7 +877,7 @@ test("명확한 일반 검색 요청은 화면이 없어도 OpenAI 웹 검색을
 
   await client.chat({ input: "최신 정책을 검색해 줘" });
   assert.deepEqual(requestBody.tool_choice, { type: "web_search" });
-  assert.match(requestBody.input[1].content[0].text, /사용자가 웹 검색을 직접 요청함/u);
+  assert.match(requestBody.input[1].content[0].text, /검색 사용: 필수 \(사용자가 직접 요청함\)/u);
 });
 
 test("후속 탐색의 boolean forceSearch만 검색을 강제하고 문자열 값은 거부한다", async () => {
@@ -911,7 +911,7 @@ test("후속 탐색의 boolean forceSearch만 검색을 강제하고 문자열 �
   await client.chat({ input: "세부 기준은 무엇인가요?", forceSearch: true });
   await client.chat({ input: "세부 기준은 무엇인가요?", forceSearch: "true" });
   assert.deepEqual(requestBodies[0].tool_choice, { type: "web_search" });
-  assert.match(requestBodies[0].input[1].content[0].text, /사용자가 웹 검색을 직접 요청함/u);
+  assert.match(requestBodies[0].input[1].content[0].text, /검색 사용: 필수 \(사용자가 직접 요청함\)/u);
   assert.equal(requestBodies[1].tool_choice, "auto");
 });
 

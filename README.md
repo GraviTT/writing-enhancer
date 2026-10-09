@@ -166,11 +166,11 @@ Windows와 Android 사이드 채팅에 같은 규칙을 적용합니다.
 
 0.5.0 (`verify.ps1` 전체 통과):
 
-- 공통 계약·기억 정책: 39개 테스트 통과
-- Windows: 111개 테스트, 글 강화기 화면 10종·사이드 채팅 3종·0.5.0 신규 화면 2종
+- 공통 계약·기억 정책: 39개 테스트 통과, 사이드 채팅 공통 규칙 생성 파일 최신 여부 확인
+- Windows: 115개 테스트(공통 사례 포함), 글 강화기 화면 10종·사이드 채팅 3종·0.5.0 신규 화면 2종
   (적용 확인 카드, 진행 표시와 중단 버튼) QA 캡처, ZIP 실추출·무결성·두 창 직접
   실행 스모크 통과
-- Android: 68개 debug 단위 테스트 통과, lint 이슈 0개, debug APK 빌드와 v2 서명 확인
+- Android: 72개 debug 단위 테스트 통과(공통 사례와 Windows와 같은 요청 글인지 확인 포함), lint 이슈 0개, debug APK 빌드와 v2 서명 확인
 - 0.5.0의 검색 판단, 후속 질문 맥락 유지, 적용 확인, 출처 없음 처리, 중단, 진행 알림은
   모의 응답 자동 테스트로 확인했습니다. 실제 API 네트워크 호출과 Android 실기기의
   새 화면(⌕ 검색·중단·적용 카드)은 이번에 확인하지 못했습니다.
@@ -210,5 +210,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\verify.ps1
 
 검증 스크립트는 최종 빌드 파일에서 `CHECKSUMS.sha256`과 Windows 배포 폴더의
 `SHA256SUMS.txt`도 다시 생성합니다.
+
+GitHub에 올리면 `.github/workflows/ci.yml`이 공통 규칙·Windows 테스트(Windows 서버)와
+Android 단위 테스트·lint·APK 빌드(Linux 서버)를 자동으로 실행합니다. 결과는 저장소의
+**Actions** 탭에서 볼 수 있습니다. 실제 AI API는 부르지 않으므로 API 키가 필요하지 않습니다.
+
+사이드 채팅의 지시문·검색 규칙·화면 문구는 [`shared/rules/`](shared/README.md)에서만 고치고,
+`shared` 폴더에서 `npm run rules`로 두 앱용 파일을 다시 만듭니다.
 
 각 플랫폼별 개발 명령은 해당 디렉터리의 README를 참고하세요.

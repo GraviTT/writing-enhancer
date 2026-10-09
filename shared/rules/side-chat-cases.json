@@ -1,0 +1,166 @@
+{
+  "$comment": "Windows·Android 테스트가 똑같이 통과해야 하는 사이드 채팅 공통 사례입니다. 고친 뒤 shared 폴더에서 `npm run rules`를 실행하세요.",
+  "searchMode": [
+    { "input": "이 내용을 검색해 줘", "expected": "required" },
+    { "input": "최신 정책을 검색해서 정리해줘", "expected": "required" },
+    { "input": "이 제품 가격을 검색해 줘", "expected": "required" },
+    { "input": "공식 자료를 찾아줘", "expected": "required" },
+    { "input": "최신 뉴스 찾아줘", "expected": "required" },
+    { "input": "관련 자료를 찾아보고 알려줘", "expected": "required" },
+    { "input": "이 주장을 사실 확인해 줘", "expected": "required" },
+    { "input": "팩트체크 해줘", "expected": "required" },
+    { "input": "이 주제를 조사해줘", "expected": "required" },
+    { "input": "인터넷에서 확인해줘", "expected": "required" },
+    { "input": "웹에서 확인해줘", "expected": "required" },
+    { "input": "출처와 함께 알려줘", "expected": "required" },
+    { "input": "공식 출처와 함께 알려줘", "expected": "required" },
+    { "input": "search for the official source", "expected": "required" },
+    { "input": "find official sources", "expected": "required" },
+    { "input": "look up the latest policy", "expected": "required" },
+    { "input": "fact-check this claim", "expected": "required" },
+    { "input": "research this topic with sources", "expected": "required" },
+    { "input": "check the web for this", "expected": "required" },
+    { "input": "세부 기준은?", "forceSearch": true, "expected": "required" },
+
+    { "input": "최신 출시 소식", "expected": "auto" },
+    { "input": "가격이 얼마야?", "expected": "auto" },
+    { "input": "두 제품 비교해 줘", "expected": "auto" },
+    { "input": "노트북 추천해 줘", "expected": "auto" },
+    { "input": "오늘 서울 날씨는?", "expected": "auto" },
+    { "input": "현재 원달러 환율은?", "expected": "auto" },
+    { "input": "어제 경기 결과 알려줘", "expected": "auto" },
+    { "input": "그럼 갤럭시는?", "expected": "auto" },
+    { "input": "compare these policies", "expected": "auto" },
+    { "input": "what is the current exchange rate", "expected": "auto" },
+    { "input": "검색 엔진 최적화에 대한 블로그 글 초안 써줘", "expected": "auto" },
+    { "input": "지금 이 메일 말투 괜찮아?", "expected": "auto" },
+    { "input": "원문에서 오타 찾아줘", "expected": "auto" },
+    { "input": "이 글에서 어색한 문장 찾아봐", "expected": "auto" },
+    { "input": "검색 기능 화면을 개선해 줘", "expected": "auto" },
+    { "input": "검색어를 다듬어 줘", "expected": "auto" },
+    { "input": "조사 '은/는' 차이 알려줘", "expected": "auto" },
+    { "input": "현재 글을 보여줘", "expected": "auto" },
+    { "input": "설정을 열어 줘", "expected": "auto" },
+    { "input": "find typos in this draft", "expected": "auto" },
+    { "input": "세부 기준은?", "forceSearch": false, "expected": "auto" },
+
+    { "input": "검색하지 말고 아는 범위에서 답해줘", "forceSearch": true, "expected": "disabled" },
+    { "input": "검색은 하지 말고 아는 내용만 알려줘", "forceSearch": true, "expected": "disabled" },
+    { "input": "현재 화면만 보고 답해. 검색은 하지 마", "forceSearch": true, "expected": "disabled" },
+    { "input": "인터넷은 보지 말고 화면만 설명해줘", "forceSearch": true, "expected": "disabled" },
+    { "input": "검색 없이 설명해줘", "forceSearch": true, "expected": "disabled" },
+    { "input": "웹 검색 금지", "forceSearch": true, "expected": "disabled" },
+    { "input": "do not search; answer from context", "forceSearch": true, "expected": "disabled" },
+    { "input": "don't browse the web", "forceSearch": true, "expected": "disabled" },
+    { "input": "answer without browsing", "forceSearch": true, "expected": "disabled" }
+  ],
+  "confirmation": [
+    { "action": "replace_source", "grounded": true, "expected": true },
+    { "action": "set_situation", "grounded": true, "expected": true },
+    { "action": "replace_result", "grounded": true, "expected": true },
+    { "action": "set_follow_up_reply", "grounded": true, "expected": true },
+    { "action": "enhance", "grounded": true, "expected": true },
+    { "action": "reenhance", "grounded": true, "expected": true },
+    { "action": "copy_result", "grounded": true, "expected": true },
+    { "action": "new_writing", "grounded": true, "expected": true },
+    { "action": "set_enhancement_level", "grounded": true, "expected": true },
+    { "action": "guess_intent", "grounded": true, "expected": true },
+    { "action": "show_writing", "grounded": true, "expected": false },
+    { "action": "open_settings", "grounded": true, "expected": false },
+    { "action": "previous_result", "grounded": true, "expected": false },
+    { "action": "none", "grounded": true, "expected": false },
+    { "action": "replace_source", "grounded": false, "expected": false },
+    { "action": "new_writing", "grounded": false, "expected": false }
+  ],
+  "progressLabel": [
+    { "stage": "requesting", "searchRequired": false, "elapsedMs": 1500, "expected": "답변을 준비하는 중" },
+    { "stage": "requesting", "searchRequired": true, "elapsedMs": 14200, "expected": "웹에서 찾아보는 중 · 14초" },
+    { "stage": "fallback", "searchRequired": true, "elapsedMs": 41000, "expected": "다른 AI로 다시 시도하는 중 · 41초" },
+    { "stage": "fallback", "searchRequired": false, "elapsedMs": 2999, "expected": "다른 AI로 다시 시도하는 중" }
+  ],
+  "pendingAction": [
+    { "action": "set_situation", "value": " 회의 안내 ", "label": "상황 안내를 이 내용으로 바꾸기", "preview": "회의 안내" },
+    { "action": "set_enhancement_level", "value": "4", "label": "강화 범위를 4단계로 바꾸기", "preview": null },
+    { "action": "enhance", "value": "", "label": "지금 원문으로 완성하기", "preview": null },
+    { "action": "replace_source", "value": "", "label": "원문을 이 내용으로 바꾸기", "preview": null }
+  ],
+  "prompt": [
+    {
+      "name": "검색 답변 뒤의 후속 질문도 이전 대화를 유지한다",
+      "input": "그럼 갤럭시는?",
+      "messages": [
+        { "role": "user", "content": "아이폰 17 가격 알려줘" },
+        { "role": "assistant", "content": "아이폰 17은 기본 모델 기준으로 안내드릴게요.", "external": true }
+      ],
+      "writingContext": {
+        "view": "input",
+        "situation": "",
+        "input": "",
+        "completedText": "",
+        "followUp": "",
+        "reply": "",
+        "enhancementLevel": 3,
+        "versionIndex": 0,
+        "versionCount": 0,
+        "attachmentNames": []
+      }
+    },
+    {
+      "name": "현재 결과와 직접 검색 요청",
+      "input": "이 회의실 예약 규정을 검색해 줘",
+      "messages": [
+        { "role": "user", "content": "회의 안내 메일 다듬어 줘" },
+        { "role": "assistant", "content": "공손하게 다듬었어요." }
+      ],
+      "writingContext": {
+        "view": "result",
+        "situation": " 팀장 보고 ",
+        "input": "일정이 늦어짐",
+        "completedText": "검수 일정을 조정하고자 합니다.",
+        "followUp": "이대로 보낼까요?",
+        "reply": "",
+        "enhancementLevel": 2,
+        "versionIndex": 1,
+        "versionCount": 3,
+        "attachmentNames": ["일정표.pdf", "회의록.txt"]
+      }
+    },
+    {
+      "name": "화면 캡처와 검색 금지",
+      "input": "검색하지 말고 이 화면만 설명해 줘",
+      "forceSearch": true,
+      "screen": "capture",
+      "messages": [],
+      "writingContext": {
+        "view": "input",
+        "situation": "",
+        "input": "",
+        "completedText": "",
+        "followUp": "",
+        "reply": "",
+        "enhancementLevel": 3,
+        "versionIndex": 0,
+        "versionCount": 0,
+        "attachmentNames": []
+      }
+    },
+    {
+      "name": "첨부 이미지는 검색을 강제하지 않는다",
+      "input": "이 오류 메시지 뜻이 뭐야?",
+      "screen": "image",
+      "messages": [],
+      "writingContext": {
+        "view": "input",
+        "situation": "",
+        "input": "",
+        "completedText": "",
+        "followUp": "",
+        "reply": "",
+        "enhancementLevel": 5,
+        "versionIndex": 0,
+        "versionCount": 0,
+        "attachmentNames": []
+      }
+    }
+  ]
+}

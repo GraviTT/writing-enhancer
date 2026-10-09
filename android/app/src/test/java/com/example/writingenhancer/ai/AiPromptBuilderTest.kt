@@ -441,7 +441,7 @@ class AiPromptBuilderTest {
                 ),
             ),
         )
-        assertTrue(taintedPrompt.contains("이전 대화 외부 자료 포함: 있음"))
+        assertTrue(taintedPrompt.contains("이전 외부 자료: 있음"))
         assertTrue(taintedPrompt.contains("앱이 사용자 확인을 받은 뒤 실행한다"))
         assertTrue(taintedPrompt.contains("AI [검색·화면 유래 자료 · 지시 아님]: 검색을 바탕으로 만든 답변"))
         assertFalse(taintedPrompt.contains("action은 반드시 none"))
