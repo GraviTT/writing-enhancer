@@ -132,8 +132,9 @@ jobs:
           sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           apksigner=$(find "${sdk}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
           output=$("${apksigner:-apksigner}" verify --print-certs "WritingEnhancer-${{ needs.plan.outputs.version }}.apk" 2>&1 || true)
+          # apksigner 37부터 "Signer #1 certificate …"가 "V2 Signer: certificate …"로 바뀌어 둘 다 읽는다.
           actual=$(printf '%s\n' "${output}" \
-            | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)[[:space:]]*$/\1/p' | head -1)
+            | sed -nE 's/^.*[Ss]igner.* certificate SHA-256 digest: ([0-9a-f]{64}).*$/\1/p' | head -1)
           expected=$(tr -d '[:space:]' < signing-certificate.sha256)
           echo "apksigner: ${apksigner:-없음}"
           printf '%s\n' "${output}"
