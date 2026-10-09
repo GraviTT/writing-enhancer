@@ -29,3 +29,6 @@ secrets/
 # Kotlin compiler caches and loose build archives
 .kotlin/
 android/*.zip
+
+# 실기기 검수 화면은 개인 화면이 찍힐 수 있어 저장소에 올리지 않는다.
+android/device-qa/
