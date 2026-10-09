@@ -1462,3 +1462,8 @@ textarea {
     transition-duration: 0.01ms !important;
   }
 }
+
+.icon-button.is-active {
+  background: var(--purple-soft);
+  color: var(--purple-dark);
+}

@@ -18,12 +18,6 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
   resizePanel: (payload) => ipcRenderer.invoke("panel:resize-move", payload),
   openSideChat: () => ipcRenderer.invoke("side-chat:open"),
   closeSideChat: () => ipcRenderer.invoke("side-chat:close"),
-  minimizeSideChat: () => ipcRenderer.invoke("side-chat:minimize"),
-  openWritingFromSideChat: () => ipcRenderer.invoke("side-chat:open-writing"),
-  beginSideChatDrag: () => ipcRenderer.invoke("side-chat:drag-start"),
-  moveSideChat: (payload) => ipcRenderer.invoke("side-chat:drag-move", payload),
-  beginSideChatResize: () => ipcRenderer.invoke("side-chat:resize-start"),
-  resizeSideChat: (payload) => ipcRenderer.invoke("side-chat:resize-move", payload),
   loadSideChat: () => ipcRenderer.invoke("side-chat:load"),
   sendSideChat: (input, screenAttachment = null, forceSearch = false) =>
     ipcRenderer.invoke("side-chat:send", {
@@ -71,6 +65,7 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
   removeMemories: (ids) => ipcRenderer.invoke("memory:remove", ids),
   clearMemories: () => ipcRenderer.invoke("memory:clear"),
   onPanelState: (callback) => subscribe("panel:state", callback),
+  onSurfaceShow: (callback) => subscribe("panel:surface", callback),
   onFocusInput: (callback) => subscribe("panel:focus-input", callback),
   onOpenSettings: (callback) => subscribe("settings:open", callback),
   onOpenHistory: (callback) => subscribe("history:open", callback),

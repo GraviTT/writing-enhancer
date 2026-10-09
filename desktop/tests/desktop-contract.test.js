@@ -42,13 +42,15 @@ test("단순 UI에 접힌 상황·도구, 강화 범위, 히스토리, 기억 �
   assert.match(html, /placeholder="아니면 다른 요구 사항 입력"/u);
 });
 
-test("사이드 채팅 베타는 별도 대화 저장소를 유지하면서 현재 글과 기능을 연동한다", () => {
+test("사이드 채팅은 글 강화기 창 안의 화면으로 별도 대화 저장소를 유지하면서 현재 글과 기능을 연동한다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const chatRenderer = read("src/renderer/side-chat.js");
-  assert.match(main, /function createSideChatWindow\(\)/u);
-  assert.match(main, /side-chat\.html/u);
+  assert.match(main, /function showChatSurface\(/u);
+  assert.doesNotMatch(main, /side-chat\.html/u);
+  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 1);
+  assert.match(html, /id="chatSurface"/u);
   assert.match(main, /new SideChatStore/u);
   assert.match(main, /side-chat:send/u);
   assert.match(main, /aiClient\.chat/u);
@@ -75,20 +77,20 @@ test("사이드 채팅 베타는 별도 대화 저장소를 유지하면서 현�
 
 test("사이드 채팅 초기화는 네이티브 확인창 없이 포커스와 실제 입력을 복구한다", () => {
   const main = read("src/main.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const chatRenderer = read("src/renderer/side-chat.js");
   assert.match(html, /id="clearConfirm"/u);
   assert.match(chatRenderer, /function performClearChat\(\)/u);
   assert.doesNotMatch(chatRenderer, /window\.confirm/u);
   assert.match(chatRenderer, /await api\.focusSideChatInput\(\)/u);
-  assert.match(main, /sideChatWindow\.webContents\.focus\(\)/u);
-  assert.match(main, /sideChatWindow\.webContents\.insertText\("초기화 직후 입력 가능"\)/u);
+  assert.match(main, /mainWindow\.webContents\.focus\(\)/u);
+  assert.match(main, /mainWindow\.webContents\.insertText\("초기화 직후 입력 가능"\)/u);
 });
 
 test("사용자 메시지 수정은 해당 지점 이후를 제거하고 즉시 재응답한다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const chatRenderer = read("src/renderer/side-chat.js");
   const store = read("src/lib/side-chat-store.js");
   assert.match(preload, /editSideChat/u);
@@ -105,9 +107,9 @@ test("사용자 메시지 수정은 해당 지점 이후를 제거하고 즉시 
 test("사이드 채팅 메시지 동작은 수정 왼쪽·AI 복사 오른쪽에 배치된다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const chatRenderer = read("src/renderer/side-chat.js");
-  const css = read("src/renderer/side-chat.css");
+  const css = read("src/renderer/chat.css");
   const editAppend = chatRenderer.indexOf("row.append(edit)");
   const bubbleAppend = chatRenderer.indexOf("row.append(bubble)");
   const copyAppend = chatRenderer.indexOf("row.append(copy)");
@@ -127,7 +129,7 @@ test("사이드 채팅 검색 답변은 실제 웹 도구와 클릭 가능한 �
   const main = read("src/main.js");
   const preload = read("src/preload.js");
   const renderer = read("src/renderer/side-chat.js");
-  const css = read("src/renderer/side-chat.css");
+  const css = read("src/renderer/chat.css");
   const rules = readSharedRules();
   assert.match(client, /type: "web_search", search_context_size: "high"/u);
   assert.match(client, /request\.max_tool_calls = 8/u);
@@ -152,7 +154,7 @@ test("후속 탐색 칩과 검색 버튼은 엄격한 boolean 강제 검색 신�
   const client = read("src/lib/ai-client.js");
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const renderer = read("src/renderer/side-chat.js");
   assert.match(renderer, /sendMessage\(\{ forceSearch: true \}\)/u);
   assert.match(renderer, /options\?\.forceSearch === true/u);
@@ -170,7 +172,7 @@ test("후속 탐색 칩과 검색 버튼은 엄격한 boolean 강제 검색 신�
 test("사이드 채팅 화면·이미지는 미리보기와 영역 선택 뒤 1회 검색하고 폐기한다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const renderer = read("src/renderer/side-chat.js");
   const attachments = read("src/lib/attachment-utils.js");
   const captureStart = main.indexOf("async function captureSideChatScreen()");
@@ -188,10 +190,9 @@ test("사이드 채팅 화면·이미지는 미리보기와 영역 선택 뒤 1�
   assert.match(preload, /captureSideChatScreen/u);
   assert.match(main, /ipcMain\.handle\("side-chat:capture-screen"/u);
   assert.ok(capture.indexOf("mainWindow.hide()") < capture.indexOf("await wait(260)"));
-  assert.ok(capture.indexOf("sideChatWindow.hide()") < capture.indexOf("await wait(260)"));
   assert.ok(capture.indexOf("await wait(260)") < capture.indexOf("desktopCapturer.getSources"));
   assert.match(capture, /finally\s*\{/u);
-  assert.match(capture, /sideChatWindow\.showInactive\(\)/u);
+  assert.match(capture, /focusChatSurface\(\)/u);
   assert.match(send, /attachments: screenAttachments/u);
   assert.match(main, /screenContext: attachments\.length > 0/u);
   assert.doesNotMatch(send, /saveHistory|draftStore|fs\.write/u);
@@ -251,7 +252,7 @@ test("사이드 채팅 답변은 중단할 수 있고 진행 단계와 경과 �
   const client = read("src/lib/ai-client.js");
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
+  const html = read("src/renderer/index.html");
   const renderer = read("src/renderer/side-chat.js");
   assert.match(client, /callerSignal\?\.addEventListener\?\.\("abort"/u);
   assert.match(client, /error\.code = "CANCELLED"/u);
@@ -283,24 +284,21 @@ test("검색 금지 화면 응답은 실제 검색 사용 여부에 맞는 완�
   assert.match(renderer, /선택한 이미지를 확인했어요/u);
 });
 
-test("네이티브 닫기에서도 대기 중인 일회성 화면을 renderer에서 폐기한다", () => {
+test("창을 접을 때도 대기 중인 일회성 화면을 renderer에서 폐기한다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
   const renderer = read("src/renderer/side-chat.js");
-  const closeStart = main.indexOf('sideChatWindow.on("close"');
-  const closeEnd = main.indexOf('sideChatWindow.on("closed"', closeStart);
-  const nativeClose = main.slice(closeStart, closeEnd);
-  assert.match(nativeClose, /side-chat:discard-screen-context/u);
-  assert.ok(
-    nativeClose.indexOf("side-chat:discard-screen-context") <
-      nativeClose.indexOf("sideChatWindow.hide()")
-  );
+  const start = main.indexOf("function setPanelState(expanded, options = {})");
+  const end = main.indexOf("function togglePanel()", start);
+  const panelState = main.slice(start, end);
+  assert.match(panelState, /if \(isExpanded && !expanded\)/u);
+  assert.match(panelState, /side-chat:discard-screen-context/u);
   assert.match(preload, /onSideChatDiscardScreenContext/u);
   assert.match(renderer, /onSideChatDiscardScreenContext\(\(\) => clearScreenContext/u);
 });
 
 test("검색 출처·후속 탐색·화면 상태는 읽기 쉬운 글자와 충분한 취소 영역을 사용한다", () => {
-  const css = read("src/renderer/side-chat.css");
+  const css = read("src/renderer/chat.css");
   assert.match(css, /\.message\s*\{[\s\S]*font-size:\s*13px/u);
   assert.match(css, /\.message-sources-label[\s\S]*font-size:\s*12px/u);
   assert.match(css, /\.message-source-link[\s\S]*font-size:\s*12px/u);
@@ -310,20 +308,33 @@ test("검색 출처·후속 탐색·화면 상태는 읽기 쉬운 글자와 충
   assert.match(css, /\.visual-preview-remove[\s\S]*width:\s*27px;[\s\S]*height:\s*27px/u);
 });
 
-test("사이드 채팅은 글 강화기와 단일 활성 창처럼 전환되고 최소화·바깥 클릭을 지원한다", () => {
+test("사이드 채팅과 글 강화기는 한 창 안에서 전환되고 바깥 클릭에 함께 접힌다", () => {
   const main = read("src/main.js");
   const preload = read("src/preload.js");
-  const html = read("src/renderer/side-chat.html");
-  assert.match(main, /minimizable:\s*true/u);
-  assert.match(main, /sideChatWindow\.on\("blur"/u);
+  const html = read("src/renderer/index.html");
+  const renderer = read("src/renderer/renderer.js");
+  const chat = read("src/renderer/side-chat.js");
+  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 1);
+  assert.doesNotMatch(main, /sideChatWindow|side-chat:minimize|side-chat:drag-move/u);
   assert.match(main, /mainWindow\.on\("blur"/u);
-  assert.match(main, /mainWindow\.hide\(\)/u);
-  assert.match(main, /side-chat:minimize/u);
-  assert.match(main, /side-chat:open-writing/u);
-  assert.match(preload, /minimizeSideChat/u);
-  assert.match(preload, /openWritingFromSideChat/u);
+  assert.match(main, /"panel:surface"/u);
+  assert.match(preload, /onSurfaceShow/u);
+  assert.doesNotMatch(preload, /minimizeSideChat|moveSideChat|resizeSideChat/u);
+  assert.match(renderer, /function showSurface\(name\)/u);
+  assert.match(renderer, /window\.writingPanel = \{/u);
+  assert.match(renderer, /showSurface\(state\.surface === "chat" \? "writing" : "chat"\)/u);
+  assert.match(renderer, /window\.sideChatSurface\?\.handleEscape\(\)/u);
   assert.match(html, /id="openWritingButton"/u);
-  assert.match(html, /id="minimizeChatButton"/u);
+  assert.match(html, /id="chatSurface"/u);
+  assert.doesNotMatch(html, /id="minimizeChatButton"|id="sideChatResizeHandle"/u);
+  assert.match(html, /<link rel="stylesheet" href="\.\/chat\.css" \/>/u);
+  assert.match(chat, /\(function sideChatSurface\(\) \{/u);
+  assert.match(chat, /window\.sideChatSurface = \{/u);
+  assert.match(chat, /window\.writingPanel\?\.showSurface\("writing"\)/u);
+  const css = read("src/renderer/chat.css");
+  for (const line of css.split("\n")) {
+    if (/^[^\s@}/].*\{$/u.test(line)) assert.match(line, /^\.chat-surface/u, line);
+  }
 });
 
 test("캡처는 창을 숨기고 대기한 뒤 촬영하며 finally에서 원래 상태를 복원한다", () => {
@@ -361,7 +372,6 @@ test("이동 세션은 시작 크기를 고정하고 네이티브 테두리 크�
   const main = read("src/main.js");
   assert.match(main, /panelDragSession = mainWindow\.getBounds\(\)/u);
   assert.match(main, /width: locked\.width,\s*height: locked\.height/u);
-  assert.match(main, /sideChatDragSession = sideChatWindow\?\.getBounds/u);
   assert.match(main, /resizable: false/u);
   assert.doesNotMatch(main, /mainWindow\.on\("resize"/u);
   assert.match(main, /dragSizeStable/u);
@@ -412,7 +422,7 @@ test("portable smoke는 ZIP을 임시 폴더에 실제 추출해 내부 실행 �
   assert.match(smoke, /\["EPERM", "EBUSY", "ENOTEMPTY"\]/u);
   assert.match(smoke, /checks\.archiveExtractedLauncher\?\.exitCode === 0/u);
   const main = read("src/main.js");
-  assert.match(main, /chatState\.title !== "사이드 채팅 베타"/u);
+  assert.match(main, /chatState\.surface !== "chat"/u);
 });
 
 test("음성 입력은 Web Speech 실제 경로와 권한·미지원·네트워크 실패 안내를 제공한다", () => {

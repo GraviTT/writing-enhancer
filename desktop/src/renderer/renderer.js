@@ -98,6 +98,8 @@ const elements = Object.fromEntries(
 );
 
 const state = {
+  // 한 창 안에서 보이는 화면: "writing"(글 강화기) 또는 "chat"(사이드 채팅)
+  surface: "writing",
   attachments: [],
   versions: [],
   versionIndex: -1,
@@ -165,9 +167,49 @@ function setView(name) {
   elements.guessView.classList.toggle("is-hidden", name !== "guess");
   elements.resultView.classList.toggle("is-hidden", name !== "result");
   elements.loadingView.classList.toggle("is-hidden", name !== "loading");
-  elements.newButton.classList.toggle("is-hidden", name === "input");
+  elements.newButton.classList.toggle("is-hidden", name === "input" || state.surface === "chat");
   window.scrollTo(0, 0);
 }
+
+// 글 강화기와 사이드 채팅은 같은 창 안의 두 화면이다. 창 이동·크기·접기는 함께 쓴다.
+function showSurface(name) {
+  const surface = name === "chat" ? "chat" : "writing";
+  const changed = state.surface !== surface;
+  state.surface = surface;
+  const chat = surface === "chat";
+  document.querySelector(".panel-content").classList.toggle("is-hidden", chat);
+  document.querySelector("#chatSurface").classList.toggle("is-hidden", !chat);
+  elements.app.dataset.surface = surface;
+  elements.chatButton.classList.toggle("is-active", chat);
+  elements.chatButton.setAttribute("aria-pressed", chat ? "true" : "false");
+  elements.chatButton.setAttribute("aria-label", chat ? "글 강화기로 돌아가기" : "사이드 채팅 베타 열기");
+  elements.historyButton.classList.toggle("is-hidden", chat);
+  elements.newButton.classList.toggle(
+    "is-hidden",
+    chat || !elements.inputView.classList.contains("is-hidden")
+  );
+  if (chat) {
+    window.sideChatSurface?.focus();
+  } else if (changed) {
+    focusWritingInput();
+  }
+  return surface;
+}
+
+function focusWritingInput() {
+  if (document.querySelector(".overlay-popup:not(.is-hidden)")) return;
+  const target = !elements.inputView.classList.contains("is-hidden")
+    ? elements.sourceInput
+    : !elements.guessView.classList.contains("is-hidden")
+      ? elements.guessAnswer
+      : elements.replyInput;
+  target?.focus();
+}
+
+window.writingPanel = {
+  showSurface,
+  currentSurface: () => state.surface
+};
 
 function showToast(message, options = {}) {
   window.clearTimeout(state.toastTimer);
@@ -931,9 +973,8 @@ installDrag(elements.settingsPopupDragHandle);
 installDrag(elements.memoryPopupDragHandle);
 installResize(elements.resizeHandle);
 elements.collapseButton.addEventListener("click", () => api.collapsePanel());
-elements.chatButton.addEventListener("click", async () => {
-  await api.openSideChat();
-  showToast("사이드 채팅 베타를 별도 창으로 열었어요.");
+elements.chatButton.addEventListener("click", () => {
+  showSurface(state.surface === "chat" ? "writing" : "chat");
 });
 elements.situationToggle.addEventListener("click", () => {
   const expanded = elements.situationSection.classList.contains("is-hidden");
@@ -1131,6 +1172,10 @@ elements.clearMemoryButton.addEventListener("click", async () => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (window.sideChatSurface?.handleEscape()) {
+    event.preventDefault();
+    return;
+  }
   if (!closeTopOverlay()) api.collapsePanel();
 });
 window.addEventListener("beforeunload", () => {
@@ -1147,20 +1192,18 @@ function handlePanelState({ expanded, side, shortcutWarning }) {
 
 api.onPanelState(handlePanelState);
 api.onFocusInput(() => {
-  if (document.querySelector(".overlay-popup:not(.is-hidden)")) return;
-  const target = !elements.inputView.classList.contains("is-hidden")
-    ? elements.sourceInput
-    : !elements.guessView.classList.contains("is-hidden")
-      ? elements.guessAnswer
-      : elements.replyInput;
-  target?.focus();
+  if (state.surface === "chat") window.sideChatSurface?.focus();
+  else focusWritingInput();
 });
+api.onSurfaceShow(showSurface);
 api.onOpenSettings(openSettings);
 api.onOpenHistory(openHistory);
 api.onSideChatWritingAction(async (action) => {
   const name = action?.name || "none";
   const value = String(action?.value || "");
   if (name === "none") return;
+  // 채팅에서 실행한 동작의 결과를 바로 볼 수 있게 글 강화기 화면으로 전환한다.
+  showSurface("writing");
 
   if (name === "show_writing") {
     if (state.versions.length > 0) renderCurrentVersion();

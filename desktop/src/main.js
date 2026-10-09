@@ -40,11 +40,7 @@ const {
   DEFAULT_SHORTCUT,
   registerWithFallback
 } = require("./lib/shortcut-registration");
-const {
-  constrainPartiallyVisibleBounds,
-  finalizeDraggedBounds,
-  resolvePanelBounds
-} = require("./lib/window-layout");
+const { finalizeDraggedBounds, resolvePanelBounds } = require("./lib/window-layout");
 
 const QA_CAPTURE = process.argv.includes("--qa-capture");
 const SMOKE_TEST = process.argv.includes("--smoke-test");
@@ -56,8 +52,6 @@ if (QA_CAPTURE) {
 }
 
 let mainWindow;
-let sideChatWindow;
-let sideChatLoadPromise;
 let tray;
 let configStore;
 let memoryStore;
@@ -105,8 +99,6 @@ function blockAutoCollapse() {
 }
 let panelDragSession;
 let panelResizeSession;
-let sideChatDragSession;
-let sideChatResizeSession;
 let latestWritingContext = {};
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -178,18 +170,17 @@ function getWritingContext() {
 }
 
 function broadcastWritingContext() {
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
-  sideChatWindow.webContents.send("side-chat:writing-context-updated", getWritingContext());
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("side-chat:writing-context-updated", getWritingContext());
 }
 
-function restoreSideChatInputFocus() {
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
-  if (!sideChatWindow.isVisible()) sideChatWindow.show();
-  sideChatWindow.setFocusable(true);
-  sideChatWindow.moveTop();
-  sideChatWindow.focus();
-  sideChatWindow.webContents.focus();
-  sideChatWindow.webContents.send("side-chat:focus-input");
+// 사이드 채팅은 글 강화기 창 안의 화면이다. 창을 보이게 하고 채팅 입력칸에 초점을 준다.
+function focusChatSurface() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.focus();
+  mainWindow.webContents.send("side-chat:focus-input");
 }
 
 function dispatchWritingAction(action) {
@@ -206,8 +197,8 @@ function dispatchWritingAction(action) {
 }
 
 function sendSideChatProgress(progress) {
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
-  sideChatWindow.webContents.send("side-chat:progress", {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send("side-chat:progress", {
     stage: limitedText(progress?.stage, 40),
     provider: limitedText(progress?.provider, 40),
     searchPolicy: limitedText(progress?.searchPolicy, 40)
@@ -323,158 +314,24 @@ function applyAppearance() {
     mainWindow.setOpacity(settings.windowOpacity);
     mainWindow.webContents.setZoomFactor(settings.fontScale);
   }
-  if (sideChatWindow && !sideChatWindow.isDestroyed()) {
-    sideChatWindow.setOpacity(settings.windowOpacity);
-    sideChatWindow.webContents.setZoomFactor(settings.fontScale);
-  }
 }
 
-function resolveSideChatBounds() {
-  const stored = sideChatStore.getWindowBounds();
-  if (stored) {
-    const display = screen.getDisplayMatching(stored);
-    return constrainPartiallyVisibleBounds(stored, display.workArea);
-  }
-  const anchor = mainWindow?.getBounds() || screen.getPrimaryDisplay().workArea;
-  const display = screen.getDisplayMatching(anchor);
-  const width = 400;
-  const height = Math.min(700, display.workArea.height);
-  const candidateX = anchor.x - width - 12;
-  return constrainPartiallyVisibleBounds(
-    {
-      x:
-        candidateX >= display.workArea.x
-          ? candidateX
-          : display.workArea.x + display.workArea.width - width - 18,
-      y: anchor.y,
-      width,
-      height
-    },
-    display.workArea
-  );
-}
-
-function persistSideChatBounds() {
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
-  sideChatStore.saveWindowBounds(sideChatWindow.getBounds());
-}
-
-function createSideChatWindow() {
-  if (sideChatWindow && !sideChatWindow.isDestroyed()) return sideChatWindow;
-  sideChatWindow = new BrowserWindow({
-    ...resolveSideChatBounds(),
-    show: false,
-    frame: false,
-    transparent: true,
-    backgroundColor: "#00000000",
-    resizable: false,
-    minimizable: true,
-    maximizable: false,
-    fullscreenable: false,
-    alwaysOnTop: true,
-    skipTaskbar: false,
-    hasShadow: false,
-    title: "사이드 채팅 베타",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      spellcheck: true
-    }
-  });
-  sideChatWindow.setMenuBarVisibility(false);
-  sideChatWindow.setAlwaysOnTop(true, "floating");
-  sideChatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  applyAppearance();
-  sideChatLoadPromise = sideChatWindow.loadFile(
-    path.join(__dirname, "renderer", "side-chat.html")
-  );
-  sideChatWindow.on("close", (event) => {
-    if (!sideChatWindow.isDestroyed()) {
-      sideChatWindow.webContents.send("side-chat:discard-screen-context");
-    }
-    if (isQuitting) return;
-    event.preventDefault();
-    persistSideChatBounds();
-    sideChatWindow.hide();
-    showCollapsedWritingHandle();
-  });
-  sideChatWindow.on("blur", () => {
-    if (!canAutoCollapse() || !sideChatWindow?.isVisible() || sideChatWindow.isMinimized()) return;
-    sideChatWindow.webContents.send("side-chat:discard-screen-context");
-    persistSideChatBounds();
-    sideChatWindow.hide();
-    showCollapsedWritingHandle();
-  });
-  sideChatWindow.on("closed", () => {
-    sideChatWindow = undefined;
-    sideChatLoadPromise = undefined;
-  });
-  return sideChatWindow;
-}
-
-async function showSideChatWindow({ focus = true } = {}) {
-  const chatWindow = createSideChatWindow();
-  await sideChatLoadPromise;
-  if (!chatWindow || chatWindow.isDestroyed()) return;
-  suppressAutoCollapse();
-  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
-    if (isExpanded) persistPlacement(true);
-    const mainBounds = mainWindow.getBounds();
-    const chatBounds = chatWindow.getBounds();
-    chatWindow.setBounds({ ...chatBounds, x: mainBounds.x, y: mainBounds.y });
-    mainWindow.hide();
-  }
-  if (chatWindow.isMinimized()) chatWindow.restore();
-  if (focus) chatWindow.show();
-  else chatWindow.showInactive();
-  broadcastWritingContext();
-  if (focus) {
-    restoreSideChatInputFocus();
-    setTimeout(restoreSideChatInputFocus, 80);
-  } else {
-    chatWindow.webContents.send("side-chat:focus-input");
-  }
-}
-
-function showCollapsedWritingHandle() {
+// 글 강화기 창을 펼치고 그 안의 화면("writing" 또는 "chat")을 보여 준다.
+function showSurface(surface, { focus = true } = {}) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  suppressAutoCollapse(300);
-  setPanelState(false, { focus: false, remember: false });
+  suppressAutoCollapse();
+  setPanelState(true, { focus, remember: false });
+  mainWindow.webContents.send("panel:surface", surface);
+}
+
+function showChatSurface({ focus = true } = {}) {
+  showSurface("chat", { focus });
+  broadcastWritingContext();
 }
 
 function showWritingWindow({ settings = false, focus = true } = {}) {
-  suppressAutoCollapse();
-  let chatOrigin;
-  if (sideChatWindow && !sideChatWindow.isDestroyed()) {
-    if (sideChatWindow.isVisible() && !sideChatWindow.isMinimized()) {
-      chatOrigin = sideChatWindow.getBounds();
-      persistSideChatBounds();
-    }
-    sideChatWindow.hide();
-  }
-  setPanelState(true, { focus, remember: false });
-  if (chatOrigin && mainWindow && !mainWindow.isDestroyed()) {
-    const current = mainWindow.getBounds();
-    const display = screen.getDisplayMatching(chatOrigin);
-    const next = constrainPartiallyVisibleBounds(
-      { ...current, x: chatOrigin.x, y: chatOrigin.y },
-      display.workArea
-    );
-    mainWindow.setBounds(next);
-    persistPlacement(true);
-  }
+  showSurface("writing", { focus });
   if (settings) mainWindow.webContents.send("settings:open");
-}
-
-function repositionSideChatForDisplayChange() {
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
-  const current = sideChatWindow.getBounds();
-  const display = screen.getDisplayMatching(current);
-  const next = constrainPartiallyVisibleBounds(current, display.workArea);
-  sideChatWindow.setBounds(next);
-  sideChatStore.saveWindowBounds(next);
 }
 
 function repositionForDisplayChange() {
@@ -513,6 +370,10 @@ function setPanelState(expanded, options = {}) {
   panelResizeSession = undefined;
   if (isExpanded !== expanded && mainWindow.isVisible() && options.remember !== false) {
     persistPlacement(isExpanded);
+  }
+  if (isExpanded && !expanded) {
+    // 접을 때 사이드 채팅에 준비해 둔 일회성 화면 이미지를 버린다.
+    mainWindow.webContents.send("side-chat:discard-screen-context");
   }
   isExpanded = expanded;
   const { side: _side, ...bounds } = getPanelBounds(expanded);
@@ -637,35 +498,20 @@ async function captureQaScreens() {
   await capture("v3-08-settings-memory.png");
   await setQa("memory");
   await capture("v3-09-memory-editor.png");
-  await showSideChatWindow({ focus: false });
-  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showDemo()");
-  await wait(180);
-  const sideChatImage = await sideChatWindow.webContents.capturePage();
-  fs.writeFileSync(
-    path.join(qaDirectory, "v4-01-side-chat-beta.png"),
-    sideChatImage.toPNG()
-  );
-  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showEditDemo()");
-  await wait(120);
-  const sideChatEditImage = await sideChatWindow.webContents.capturePage();
-  fs.writeFileSync(
-    path.join(qaDirectory, "v4-03-side-chat-edit.png"),
-    sideChatEditImage.toPNG()
-  );
-  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showSearchDemo()");
-  await wait(120);
-  fs.writeFileSync(
-    path.join(qaDirectory, "v5-01-side-chat-confirm.png"),
-    (await sideChatWindow.webContents.capturePage()).toPNG()
-  );
-  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showProgressDemo()");
-  await wait(120);
-  fs.writeFileSync(
-    path.join(qaDirectory, "v5-02-side-chat-progress.png"),
-    (await sideChatWindow.webContents.capturePage()).toPNG()
-  );
-  sideChatWindow.hide();
+  const captureChat = async (script, fileName) => {
+    await mainWindow.webContents.executeJavaScript(
+      `window.__writingEnhancerQa?.show("result"); window.writingPanel?.showSurface("chat"); ${script}`
+    );
+    await wait(180);
+    await capture(fileName);
+  };
+  await captureChat("window.__sideChatQa?.showDemo()", "v4-01-side-chat-beta.png");
+  await captureChat("window.__sideChatQa?.showEditDemo()", "v4-03-side-chat-edit.png");
+  await captureChat("window.__sideChatQa?.showSearchDemo()", "v5-01-side-chat-confirm.png");
+  await captureChat("window.__sideChatQa?.showProgressDemo()", "v5-02-side-chat-progress.png");
+  await mainWindow.webContents.executeJavaScript('window.writingPanel?.showSurface("writing")');
   setPanelState(true, { focus: false, remember: false });
+  await setQa("opacity-min");  setPanelState(true, { focus: false, remember: false });
   await setQa("opacity-min");
   await capture("v3-10-opacity-min-readability.png");
 
@@ -712,7 +558,7 @@ function createTray() {
       },
       {
         label: "사이드 채팅 (베타)",
-        click: () => showSideChatWindow()
+        click: () => showChatSurface()
       },
       { type: "separator" },
       {
@@ -774,19 +620,11 @@ async function captureCurrentScreen() {
 async function captureSideChatScreen() {
   const mainWasVisible = Boolean(mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible());
   const mainWasFocused = Boolean(mainWasVisible && mainWindow.isFocused());
-  const chatWasVisible = Boolean(
-    sideChatWindow && !sideChatWindow.isDestroyed() && sideChatWindow.isVisible()
-  );
-  const chatWasFocused = Boolean(chatWasVisible && sideChatWindow.isFocused());
   const expandedBeforeCapture = isExpanded;
-  const referenceBounds =
-    sideChatWindow && !sideChatWindow.isDestroyed()
-      ? sideChatWindow.getBounds()
-      : mainWindow.getBounds();
-  const display = getDisplayForBounds(referenceBounds);
+  const display = getDisplayForBounds(mainWindow.getBounds());
   suppressAutoCollapse(2_000);
+  // 촬영 화면에 글 강화기 창이 찍히지 않도록 잠시 숨긴다.
   if (mainWasVisible) mainWindow.hide();
-  if (chatWasVisible) sideChatWindow.hide();
   await wait(260);
   try {
     const { width, height } = captureRequestDimensions(display);
@@ -803,20 +641,9 @@ async function captureSideChatScreen() {
     }
     return makeBoundedScreenAttachment(source.thumbnail, "사이드 채팅 현재 화면.png");
   } finally {
-    if (mainWasVisible && !chatWasVisible) {
+    if (mainWasVisible) {
       setPanelState(expandedBeforeCapture, { focus: false, remember: false });
-    }
-    if (chatWasVisible && sideChatWindow && !sideChatWindow.isDestroyed()) {
-      if (chatWasFocused) sideChatWindow.show();
-      else sideChatWindow.showInactive();
-      sideChatWindow.moveTop();
-    }
-    if (mainWasFocused && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.focus();
-    } else if (chatWasFocused && sideChatWindow && !sideChatWindow.isDestroyed()) {
-      sideChatWindow.focus();
-      sideChatWindow.webContents.focus();
-      sideChatWindow.webContents.send("side-chat:focus-input");
+      if (mainWasFocused) focusChatSurface();
     }
   }
 }
@@ -901,82 +728,13 @@ function registerIpcHandlers() {
     }
     return { bounds: mainWindow.getBounds(), side };
   });
-  ipcMain.handle("side-chat:open", async () => {
-    await showSideChatWindow();
+  ipcMain.handle("side-chat:open", () => {
+    showChatSurface();
     return { opened: true };
   });
   ipcMain.handle("side-chat:close", () => {
-    if (sideChatWindow && !sideChatWindow.isDestroyed()) {
-      sideChatWindow.webContents.send("side-chat:discard-screen-context");
-      sideChatDragSession = undefined;
-      sideChatResizeSession = undefined;
-      persistSideChatBounds();
-      sideChatWindow.hide();
-      showCollapsedWritingHandle();
-    }
+    setPanelState(false, { animate: true, focus: false });
     return { closed: true };
-  });
-  ipcMain.handle("side-chat:minimize", () => {
-    if (sideChatWindow && !sideChatWindow.isDestroyed()) {
-      suppressAutoCollapse();
-      persistSideChatBounds();
-      sideChatWindow.minimize();
-    }
-    return { minimized: true };
-  });
-  ipcMain.handle("side-chat:open-writing", () => {
-    showWritingWindow();
-    return { opened: true };
-  });
-  ipcMain.handle("side-chat:drag-start", () => {
-    sideChatResizeSession = undefined;
-    sideChatDragSession = sideChatWindow?.getBounds() || resolveSideChatBounds();
-    sideChatWindow?.setResizable(false);
-    return { bounds: { ...sideChatDragSession } };
-  });
-  ipcMain.handle("side-chat:drag-move", (_event, request) => {
-    if (!sideChatWindow || sideChatWindow.isDestroyed()) {
-      return { bounds: resolveSideChatBounds() };
-    }
-    const current = sideChatWindow.getBounds();
-    const locked = sideChatDragSession || current;
-    const requested = {
-      x: Number.isFinite(Number(request?.x)) ? Number(request.x) : current.x,
-      y: Number.isFinite(Number(request?.y)) ? Number(request.y) : current.y,
-      width: locked.width,
-      height: locked.height
-    };
-    const display = screen.getDisplayMatching(requested);
-    const next = constrainPartiallyVisibleBounds(requested, display.workArea);
-    sideChatWindow.setBounds(next);
-    if (request?.final) {
-      sideChatStore.saveWindowBounds(next);
-      sideChatDragSession = undefined;
-    }
-    return { bounds: sideChatWindow.getBounds() };
-  });
-  ipcMain.handle("side-chat:resize-start", () => {
-    sideChatDragSession = undefined;
-    sideChatResizeSession = sideChatWindow?.getBounds() || resolveSideChatBounds();
-    return { bounds: { ...sideChatResizeSession } };
-  });
-  ipcMain.handle("side-chat:resize-move", (_event, request) => {
-    if (!sideChatWindow || sideChatWindow.isDestroyed()) {
-      return { bounds: resolveSideChatBounds() };
-    }
-    const current = sideChatWindow.getBounds();
-    const next = {
-      x: current.x,
-      y: current.y,
-      width: Math.min(680, Math.max(340, Math.round(Number(request?.width) || current.width))),
-      height: Math.min(920, Math.max(480, Math.round(Number(request?.height) || current.height)))
-    };
-    sideChatWindow.setBounds(next);
-    if (request?.final) {
-      sideChatStore.saveWindowBounds(next);
-      sideChatResizeSession = undefined;
-    }
-    return { bounds: sideChatWindow.getBounds() };
   });
   ipcMain.handle("side-chat:load", () => ({
     messages: sideChatStore.list(),
@@ -989,17 +747,17 @@ function registerIpcHandlers() {
     return latestWritingContext;
   });
   ipcMain.handle("side-chat:focus-input", () => {
-    restoreSideChatInputFocus();
-    setTimeout(restoreSideChatInputFocus, 80);
+    focusChatSurface();
+    setTimeout(focusChatSurface, 80);
     return { focused: true };
   });
   ipcMain.handle("side-chat:clear", async () => {
     cancelActiveSideChatRequest();
     discardPendingSideChatAction();
     const removed = sideChatStore.clear();
-    restoreSideChatInputFocus();
-    setTimeout(restoreSideChatInputFocus, 80);
-    setTimeout(restoreSideChatInputFocus, 220);
+    focusChatSurface();
+    setTimeout(focusChatSurface, 80);
+    setTimeout(focusChatSurface, 220);
     return { removed, messages: [] };
   });
   ipcMain.handle("side-chat:capture-screen", async () => {
@@ -1013,7 +771,7 @@ function registerIpcHandlers() {
   ipcMain.handle("side-chat:pick-image", async () => {
     const releaseAutoCollapse = blockAutoCollapse();
     try {
-      const selection = await dialog.showOpenDialog(sideChatWindow, {
+      const selection = await dialog.showOpenDialog(mainWindow, {
         title: "검색할 이미지 선택",
         properties: ["openFile"],
         filters: [
@@ -1153,7 +911,8 @@ function registerIpcHandlers() {
     }
   });
   ipcMain.handle("side-chat:open-settings", () => {
-    showWritingWindow({ settings: true });
+    // 설정 팝업은 채팅 화면 위에도 그대로 열린다.
+    mainWindow.webContents.send("settings:open");
     return { opened: true };
   });
   ipcMain.handle("external-link:open", async (_event, request) => {
@@ -1447,9 +1206,6 @@ async function initialize() {
   screen.on("display-added", repositionForDisplayChange);
   screen.on("display-removed", repositionForDisplayChange);
   screen.on("display-metrics-changed", repositionForDisplayChange);
-  screen.on("display-added", repositionSideChatForDisplayChange);
-  screen.on("display-removed", repositionSideChatForDisplayChange);
-  screen.on("display-metrics-changed", repositionSideChatForDisplayChange);
 
   if (QA_CAPTURE) {
     mainWindow.webContents.once("did-finish-load", captureQaScreens);
@@ -1481,9 +1237,8 @@ async function initialize() {
           return { start: start.bounds, end: moved.bounds };
         })()`);
         setPanelState(true, { focus: false, remember: false });
-        await showSideChatWindow({ focus: false });
-        const chatState = await sideChatWindow.webContents.executeJavaScript(
-          "({ title: document.title, ready: Boolean(window.writingEnhancer), input: Boolean(document.querySelector('#chatInput')) })"
+        const chatState = await mainWindow.webContents.executeJavaScript(
+          "(() => { const surface = window.writingPanel.showSurface('chat'); return { surface, ready: Boolean(window.writingEnhancer && window.sideChatSurface), input: Boolean(document.querySelector('#chatInput')), visible: !document.querySelector('#chatSurface').classList.contains('is-hidden') }; })()"
         );
         await mainWindow.webContents.executeJavaScript(`(() => {
           const input = document.querySelector("#sourceInput");
@@ -1491,7 +1246,7 @@ async function initialize() {
           input.dispatchEvent(new Event("input", { bubbles: true }));
         })()`);
         await wait(220);
-        const contextLinked = await sideChatWindow.webContents.executeJavaScript(
+        const contextLinked = await mainWindow.webContents.executeJavaScript(
           'document.querySelector("#writingContextText").textContent.includes("현재 작성 중인 원문 연동")'
         );
         dispatchWritingAction({ name: "set_enhancement_level", value: "5" });
@@ -1499,19 +1254,19 @@ async function initialize() {
         const actionLinked = await mainWindow.webContents.executeJavaScript(
           'document.querySelector("#enhancementLevelInput").value === "5"'
         );
-        const chatResetProbe = await sideChatWindow.webContents.executeJavaScript(
-          "window.__sideChatQa.resetAndProbe()"
+        const chatResetProbe = await mainWindow.webContents.executeJavaScript(
+          "window.writingPanel.showSurface('chat'); window.__sideChatQa.resetAndProbe()"
         );
-        sideChatWindow.webContents.insertText("초기화 직후 입력 가능");
+        mainWindow.webContents.insertText("초기화 직후 입력 가능");
         await wait(80);
-        const chatResetReady = await sideChatWindow.webContents.executeJavaScript(`({
+        const chatResetReady = await mainWindow.webContents.executeJavaScript(`({
           confirmShown: ${Boolean(chatResetProbe?.confirmShown)},
           value: document.querySelector("#chatInput").value,
           disabled: document.querySelector("#chatInput").disabled,
           readOnly: document.querySelector("#chatInput").readOnly,
           focused: document.activeElement === document.querySelector("#chatInput")
         })`);
-        sideChatWindow.hide();
+        await mainWindow.webContents.executeJavaScript("window.writingPanel.showSurface('writing')");
         const dragSizeStable =
           expandedDrag.start.width === expandedDrag.end.width &&
           expandedDrag.start.height === expandedDrag.end.height &&
@@ -1527,7 +1282,8 @@ async function initialize() {
           state.title !== "글 강화기" ||
           !state.ready ||
           !state.input ||
-          chatState.title !== "사이드 채팅 베타" ||
+          chatState.surface !== "chat" ||
+          !chatState.visible ||
           !chatState.ready ||
           !chatState.input ||
           !chatResetReady.confirmShown ||
