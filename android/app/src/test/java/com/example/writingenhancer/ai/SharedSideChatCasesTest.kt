@@ -33,10 +33,10 @@ class SharedSideChatCasesTest {
     @Test
     fun progressAndPendingActionTextMatchSharedCases() {
         SharedSideChatCases.PROGRESS_LABEL.forEach { case ->
-            val stage = if (case.stage == "fallback") {
-                SideChatProgress.Stage.FALLBACK
-            } else {
-                SideChatProgress.Stage.REQUESTING
+            val stage = when (case.stage) {
+                "fallback" -> SideChatProgress.Stage.FALLBACK
+                "searching" -> SideChatProgress.Stage.SEARCHING
+                else -> SideChatProgress.Stage.REQUESTING
             }
             assertEquals(
                 case.expected,
@@ -50,6 +50,65 @@ class SharedSideChatCasesTest {
             val action = SideChatAction(case.action, case.value)
             assertEquals(case.action, case.label, SideChatDisplayPolicy.pendingActionLabel(action))
             assertEquals(case.action, case.preview, SideChatDisplayPolicy.pendingActionPreview(action))
+        }
+    }
+
+    @Test
+    fun streamingHidesControlBlockLikeWindows() {
+        SharedSideChatCases.STREAM_VISIBLE.forEach { case ->
+            assertEquals(case.input, case.expected, ChatAnswer.visibleStreamText(case.input))
+        }
+    }
+
+    @Test
+    fun controlBlockMatchesSharedCases() {
+        SharedSideChatCases.CONTROL_BLOCK.forEach { case ->
+            val parsed = ChatAnswer.parseControlBlock(case.full)
+            assertEquals(case.name, case.answer, parsed.answer)
+            assertEquals(case.name, case.answerOffset, parsed.answerOffset)
+            assertEquals(case.name, case.role, parsed.role)
+            assertEquals(case.name, SideChatAction(case.actionName, case.actionValue), parsed.action)
+            assertEquals(case.name, case.relatedQueries, parsed.relatedQueries)
+        }
+    }
+
+    @Test
+    fun categoryMatchesSharedCases() {
+        SharedSideChatCases.CATEGORY.forEach { case ->
+            val category = ChatAnswer.finalCategory(case.role, case.action, case.hasSources)
+            assertEquals(case.toString(), case.expected, category)
+            assertEquals(case.toString(), case.label, ChatAnswer.categoryLabel(category, case.hasSources))
+        }
+    }
+
+    @Test
+    fun answerFormattingMatchesSharedCases() {
+        SharedSideChatCases.FORMAT_ANSWER.forEach { case ->
+            val annotations = case.annotations.map { annotation ->
+                val match = annotation.match ?: return@map AnswerAnnotation(
+                    annotation.start,
+                    annotation.end,
+                    annotation.source,
+                )
+                val start = case.raw.indexOf(match)
+                AnswerAnnotation(start, start + match.length, annotation.source)
+            }
+            val formatted = ChatAnswer.formatAnswer(case.raw, annotations, case.cleanLinks)
+            assertEquals(case.name, case.text, formatted.text)
+            assertEquals(
+                case.name,
+                case.citations,
+                formatted.citations.map {
+                    SharedSideChatCases.CitationText(formatted.text.substring(it.start, it.end), it.sources)
+                },
+            )
+            assertEquals(
+                case.name,
+                case.styles,
+                formatted.styles.map {
+                    SharedSideChatCases.StyleText(formatted.text.substring(it.start, it.end), it.kind)
+                },
+            )
         }
     }
 
@@ -70,6 +129,8 @@ class SharedSideChatCasesTest {
                         content = message.content,
                         createdAt = index.toLong(),
                         untrustedExternalContext = message.external,
+                        searchQueries = message.searchQueries,
+                        sources = message.sources.map { WebSource(it.title, it.url) },
                     )
                 },
                 writingContext = SideChatWritingContext(

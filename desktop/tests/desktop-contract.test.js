@@ -135,7 +135,10 @@ test("사이드 채팅 검색 답변은 실제 웹 도구와 클릭 가능한 �
   assert.match(client, /request\.max_tool_calls = 8/u);
   assert.match(rules, /2~5개의 하위 주제/u);
   assert.match(rules, /related_queries/u);
-  assert.match(client, /CHAT_SCHEMA = sideChatRules\.responseSchema/u);
+  assert.match(rules, /"fence": "app-control"/u);
+  assert.match(client, /stream: true/u);
+  assert.match(client, /streamGenerateContent\?alt=sse/u);
+  assert.match(client, /chatAnswer\.parseControlBlock\(/u);
   assert.match(client, /googleSearch: \{\}/u);
   assert.match(client, /extractOpenAISources/u);
   assert.match(client, /extractGeminiSources/u);
@@ -144,7 +147,8 @@ test("사이드 채팅 검색 답변은 실제 웹 도구와 클릭 가능한 �
   assert.match(main, /shell\.openExternal/u);
   assert.match(renderer, /function createSourceList\(message\)/u);
   assert.match(renderer, /function createRelatedQueries\(message\)/u);
-  assert.match(renderer, /웹에서 확인/u);
+  assert.match(rules, /"sourcesHeading": "웹에서 확인"/u);
+  assert.match(renderer, /chatText\.labels\.sourcesHeading/u);
   assert.match(renderer, /이어서 살펴보기/u);
   assert.match(css, /\.message-source-link/u);
   assert.match(css, /\.message-related-button/u);
@@ -259,7 +263,7 @@ test("사이드 채팅 답변은 중단할 수 있고 진행 단계와 경과 �
   assert.match(client, /payload\.onProgress\?\.\(/u);
   assert.match(main, /ipcMain\.handle\("side-chat:cancel"/u);
   assert.match(main, /signal: controller\.signal/u);
-  assert.match(main, /onProgress: sendSideChatProgress/u);
+  assert.match(main, /sendSideChatProgress\(progress\)/u);
   assert.match(main, /"side-chat:progress"/u);
   assert.match(preload, /cancelSideChat/u);
   assert.match(preload, /onSideChatProgress/u);
@@ -474,4 +478,42 @@ test("답변 입력창은 여러 줄로 늘어나되 최대 높이 이후 내부
   assert.match(html, /id="replyInput"[\s\S]*rows="2"/u);
   assert.match(css, /\.reply-input\s*\{[\s\S]*min-height:\s*48px;[\s\S]*max-height:\s*116px;/u);
   assert.match(renderer, /Math\.min\(textarea\.scrollHeight, 116\)/u);
+});
+
+test("사이드 채팅 답변은 쓰는 대로 보이고 문장 출처는 확인 대화상자를 거쳐 연다", () => {
+  const client = read("src/lib/ai-client.js");
+  const main = read("src/main.js");
+  const preload = read("src/preload.js");
+  const html = read("src/renderer/index.html");
+  const renderer = read("src/renderer/side-chat.js");
+  const css = read("src/renderer/chat.css");
+  const rules = readSharedRules();
+  assert.match(client, /payload\.onDelta\?\.\(/u);
+  assert.match(main, /"side-chat:delta"/u);
+  assert.match(main, /chatAnswer\.visibleStreamText\(/u);
+  assert.match(main, /if \(progress\?\.stage === "fallback"\) deltas\.reset\(\)/u);
+  assert.match(preload, /onSideChatDelta/u);
+  assert.match(html, /side-chat-text\.js[\s\S]*chat-answer\.js[\s\S]*renderer\.js[\s\S]*side-chat\.js/u);
+  assert.match(html, /id="sourceDialog"/u);
+  assert.match(html, /id="sourceDialogConfirm"/u);
+  assert.match(html, /id="sourceDialogCancel"/u);
+  assert.match(renderer, /function openSourceDialog\(/u);
+  assert.match(renderer, /function confirmSourceDialog\(/u);
+  assert.match(renderer, /function createCategoryBadge\(/u);
+  assert.match(renderer, /function updateStreamingBubble\(/u);
+  // 출처 링크는 대화상자의 확인 버튼에서만 외부 브라우저로 연다.
+  const linkCalls = renderer.match(/openExternalLink\(/gu) || [];
+  assert.equal(linkCalls.length, 1);
+  const confirmStart = renderer.indexOf("function confirmSourceDialog(");
+  assert.ok(renderer.indexOf("openExternalLink(") > confirmStart);
+  assert.match(rules, /"title": "출처 확인"/u);
+  assert.match(rules, /"confirm": "확인"/u);
+  assert.match(rules, /"cancel": "취소"/u);
+  assert.match(rules, /"command": "앱 조작"/u);
+  assert.match(rules, /"research": "웹 조사"/u);
+  assert.match(rules, /"writing": "글 상담"/u);
+  assert.match(css, /\.message-cite/u);
+  assert.match(css, /\.message-category/u);
+  assert.match(main, /v5-03-side-chat-source-dialog\.png/u);
+  assert.match(main, /v5-04-side-chat-streaming\.png/u);
 });

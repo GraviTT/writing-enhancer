@@ -9,6 +9,9 @@ const sideChatRules = require("../renderer/side-chat-rules");
 const MAX_MESSAGES = 60;
 const MAX_SOURCES = sideChatRules.limits.webSources;
 const MAX_RELATED_QUERIES = sideChatRules.limits.relatedQueries;
+const MAX_SEARCH_QUERIES = 8;
+const CATEGORIES = new Set(sideChatRules.control.roles);
+const STYLE_KINDS = new Set(["bold", "code"]);
 
 function cleanText(value, maximum) {
   return String(value ?? "").replace(/\u0000/gu, "").slice(0, maximum).trim();
@@ -32,7 +35,9 @@ function normalizeSources(values) {
     seen.add(url);
     sources.push({
       title: cleanText(value?.title, 160) || parsed.hostname,
-      url
+      url,
+      cited: value?.cited === true,
+      query: cleanText(value?.query, 120)
     });
     if (sources.length >= MAX_SOURCES) break;
   }
@@ -53,6 +58,43 @@ function normalizeRelatedQueries(values) {
   return queries;
 }
 
+const isIndex = (value) => Number.isInteger(value) && value >= 0;
+
+// 답변 글 안의 위치만 남긴다. 범위를 벗어나거나 겹치면 버린다.
+function normalizeRanges(values, length, accept) {
+  const ranges = [];
+  for (const value of Array.isArray(values) ? values : []) {
+    if (!isIndex(value?.start) || !isIndex(value?.end) || value.start >= value.end || value.end > length) {
+      continue;
+    }
+    const range = accept(value);
+    if (range) ranges.push({ start: value.start, end: value.end, ...range });
+  }
+  return ranges.sort((left, right) => left.start - right.start);
+}
+
+function normalizeCitations(values, length, sourceCount) {
+  const citations = normalizeRanges(values, length, (value) => {
+    const sources = [...new Set((Array.isArray(value?.sources) ? value.sources : []).filter(
+      (source) => isIndex(source) && source < sourceCount
+    ))];
+    return sources.length > 0 ? { sources } : null;
+  });
+  return citations.filter((citation, index) => index === 0 || citation.start >= citations[index - 1].end);
+}
+
+function normalizeStyles(values, length) {
+  return normalizeRanges(values, length, (value) =>
+    STYLE_KINDS.has(value?.kind) ? { kind: value.kind } : null
+  );
+}
+
+function normalizeSearchQueries(values) {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .map((value) => cleanText(value, 120))
+    .filter(Boolean))].slice(0, MAX_SEARCH_QUERIES);
+}
+
 function normalizeMessage(value) {
   const role = value?.role === "assistant" ? "assistant" : value?.role === "user" ? "user" : "";
   const content = cleanText(value?.content, role === "assistant" ? 12_000 : 6_000);
@@ -71,6 +113,10 @@ function normalizeMessage(value) {
       role === "assistant" &&
       (value?.externalGrounding === true || sources.length > 0 || legacyAssistantProvenance),
     sourcesMissing: role === "assistant" && value?.sourcesMissing === true,
+    citations: role === "assistant" ? normalizeCitations(value?.citations, content.length, sources.length) : [],
+    styles: role === "assistant" ? normalizeStyles(value?.styles, content.length) : [],
+    category: role === "assistant" && CATEGORIES.has(value?.category) ? value.category : "",
+    searchQueries: role === "assistant" ? normalizeSearchQueries(value?.searchQueries) : [],
     createdAt: Number.isFinite(Date.parse(value?.createdAt))
       ? new Date(value.createdAt).toISOString()
       : new Date().toISOString()
@@ -136,7 +182,11 @@ class SideChatStore {
       sources: assistantSources,
       relatedQueries: assistantRelatedQueries,
       externalGrounding: options?.externalGrounding === true,
-      sourcesMissing: options?.sourcesMissing === true
+      sourcesMissing: options?.sourcesMissing === true,
+      citations: options?.citations,
+      styles: options?.styles,
+      category: options?.category,
+      searchQueries: options?.searchQueries
     });
     if (!user || !assistant) {
       throw new Error("사용자 메시지와 AI 답변이 모두 있어야 대화를 저장할 수 있습니다.");
@@ -158,7 +208,11 @@ class SideChatStore {
       sources: assistantSources,
       relatedQueries: assistantRelatedQueries,
       externalGrounding: options?.externalGrounding === true,
-      sourcesMissing: options?.sourcesMissing === true
+      sourcesMissing: options?.sourcesMissing === true,
+      citations: options?.citations,
+      styles: options?.styles,
+      category: options?.category,
+      searchQueries: options?.searchQueries
     });
     if (!assistant) {
       throw new Error("AI 답변이 있어야 대화를 저장할 수 있습니다.");

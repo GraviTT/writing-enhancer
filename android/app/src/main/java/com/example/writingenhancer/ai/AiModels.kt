@@ -48,6 +48,13 @@ data class SideChatMessage(
     val followUpQueries: List<String> = emptyList(),
     val untrustedExternalContext: Boolean = false,
     val sourcesMissing: Boolean = false,
+    /** 출처가 연결된 문장 위치. [content] 기준이다. */
+    val citations: List<AnswerCitation> = emptyList(),
+    val styles: List<AnswerStyle> = emptyList(),
+    /** 요청 분류: command(앱 조작)·research(웹 조사)·writing(글 상담). 사용자 메시지는 빈 값. */
+    val category: String = "",
+    /** 이 답변을 만들 때 쓴 검색어. 후속 질문에서 같은 검색을 되풀이하지 않게 한다. */
+    val searchQueries: List<String> = emptyList(),
 )
 
 object SearchFollowUpPolicy {
@@ -177,6 +184,10 @@ data class PreparedSideChatContext(
 data class WebSource(
     val title: String,
     val url: String,
+    /** 답변 문장에 실제로 인용된 출처인지. false면 검색만 한 자료다. */
+    val cited: Boolean = false,
+    /** 이 자료를 찾은 검색어. */
+    val query: String = "",
 )
 
 object WebSourcePolicy {
@@ -195,9 +206,45 @@ object WebSourcePolicy {
 
     fun normalize(values: List<WebSource>): List<WebSource> {
         val seen = mutableSetOf<String>()
-        return values.mapNotNull { normalize(it.title, it.url) }
+        return values.mapNotNull { source ->
+            normalize(source.title, source.url)?.copy(
+                cited = source.cited,
+                query = source.query.replace("\u0000", "").trim().take(MAX_QUERY_CHARACTERS),
+            )
+        }
             .filter { seen.add(it.url) }
             .take(MAX_SOURCES)
+    }
+
+    private const val MAX_QUERY_CHARACTERS = 120
+
+    /** 실제 인용 출처를 앞에, 검색만 한 출처를 뒤에 두고 각 출처에 인용 여부와 검색어를 남긴다. */
+    fun build(cited: List<WebSource>, searched: List<WebSource>): List<WebSource> {
+        val queryByUrl = mutableMapOf<String, String>()
+        searched.forEach { value ->
+            val normalized = normalize(value.title, value.url) ?: return@forEach
+            val query = value.query.replace("\u0000", "").trim().take(MAX_QUERY_CHARACTERS)
+            if (query.isNotEmpty() && normalized.url !in queryByUrl) queryByUrl[normalized.url] = query
+        }
+        val sources = mutableListOf<WebSource>()
+        fun add(value: WebSource, isCited: Boolean) {
+            val normalized = normalize(value.title, value.url) ?: return
+            val existing = sources.indexOfFirst { it.url == normalized.url }
+            if (existing >= 0) {
+                if (isCited) sources[existing] = sources[existing].copy(cited = true)
+                return
+            }
+            if (sources.size >= MAX_SOURCES) return
+            sources += normalized.copy(cited = isCited, query = queryByUrl[normalized.url].orEmpty())
+        }
+        cited.forEach { add(it, true) }
+        searched.forEach { add(it, false) }
+        return sources
+    }
+
+    fun indexOf(sources: List<WebSource>, url: String?): Int {
+        val normalized = normalize("", url) ?: return -1
+        return sources.indexOfFirst { it.url == normalized.url }
     }
 }
 
@@ -253,6 +300,12 @@ data class SideChatResult(
     val actionRequiresConfirmation: Boolean = false,
     // 사용자가 검색을 직접 요청했지만 공급자가 출처를 돌려주지 않은 답변.
     val sourcesMissing: Boolean = false,
+    val citations: List<AnswerCitation> = emptyList(),
+    val styles: List<AnswerStyle> = emptyList(),
+    val category: String = ChatAnswer.CATEGORY_WRITING,
+    val searchQueries: List<String> = emptyList(),
+    /** 다른 공급자로 다시 물은 답변인지. */
+    val fallbackUsed: Boolean = false,
 )
 
 // 사이드 채팅 요청 진행 단계. 화면에 경과 상태를 보여 주는 데 쓴다.
@@ -263,6 +316,7 @@ data class SideChatProgress(
 ) {
     enum class Stage {
         REQUESTING,
+        SEARCHING,
         FALLBACK,
     }
 }
@@ -486,19 +540,40 @@ object SideChatPromptBuilder {
                     } else {
                         SharedSideChatRules.ROLE_USER
                     }
-                    val provenance = if (
-                        message.role == "assistant" &&
+                    val external = message.role == "assistant" &&
                         (message.untrustedExternalContext || message.sources.isNotEmpty())
-                    ) {
-                        " [${SharedSideChatRules.PROVENANCE_MARKER}]"
-                    } else {
-                        ""
-                    }
-                    selected.addFirst("$role$provenance: $content")
+                    val provenance = if (external) " [${SharedSideChatRules.PROVENANCE_MARKER}]" else ""
+                    val memory = if (external) searchMemoryLine(message) else ""
+                    val line = "$role$provenance: $content"
+                    selected.addFirst(if (memory.isEmpty()) line else "$line\n$memory")
                     remaining -= content.length
                 }
             }
         return selected.joinToString("\n\n")
+    }
+
+    /** 이전 검색 답변의 검색어와 출처를 남겨, 후속 질문에서 같은 검색을 되풀이하지 않게 한다. */
+    fun searchMemoryLine(message: SideChatMessage): String {
+        val queries = message.searchQueries
+            .filter { it.isNotBlank() }
+            .take(SharedSideChatRules.SEARCH_MEMORY_QUERIES)
+            .map { it.trim() }
+        val sources = message.sources
+            .take(SharedSideChatRules.SEARCH_MEMORY_SOURCES)
+            .map { source ->
+                val host = ChatAnswer.hostOf(source.url)
+                val title = source.title.ifEmpty { host }.trim()
+                if (host.isNotEmpty() && title != host) "$title ($host)" else title
+            }
+            .filter { it.isNotEmpty() }
+        if (queries.isEmpty() && sources.isEmpty()) return ""
+        return fillTemplate(
+            SharedSideChatRules.SEARCH_MEMORY,
+            mapOf(
+                "queries" to queries.joinToString(", ").ifEmpty { SharedSideChatRules.EMPTY },
+                "sources" to sources.joinToString(", ").ifEmpty { SharedSideChatRules.EMPTY },
+            ),
+        )
     }
 }
 
@@ -528,18 +603,17 @@ object OpenAiPrivacyPolicy {
 }
 
 object GeminiRequestContract {
-    private val baseTopLevelFields = setOf(
-        "system_instruction",
-        "contents",
-        "generationConfig",
-    )
+    private val baseTopLevelFields = setOf("system_instruction", "contents")
 
-    fun topLevelFields(searchEnabled: Boolean): Set<String> = if (searchEnabled) {
-        baseTopLevelFields + "tools"
-    } else {
-        baseTopLevelFields
-    }
+    /**
+     * 글 강화 요청은 JSON 형식(generationConfig)을 쓰고, 사이드 채팅은 일반 글을 스트리밍으로
+     * 받으므로 generationConfig를 보내지 않는다.
+     */
+    fun topLevelFields(searchEnabled: Boolean, structuredOutput: Boolean = true): Set<String> =
+        baseTopLevelFields +
+            (if (structuredOutput) setOf("generationConfig") else emptySet()) +
+            (if (searchEnabled) setOf("tools") else emptySet())
 
-    fun matches(fields: Set<String>, searchEnabled: Boolean): Boolean =
-        fields == topLevelFields(searchEnabled)
+    fun matches(fields: Set<String>, searchEnabled: Boolean, structuredOutput: Boolean = true): Boolean =
+        fields == topLevelFields(searchEnabled, structuredOutput)
 }

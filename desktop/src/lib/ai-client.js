@@ -9,11 +9,12 @@ const {
 const enhancementLevels = require("../renderer/enhancement-levels");
 const sideChatRules = require("../renderer/side-chat-rules");
 const { fillTemplate, labels: sideChatLabels } = require("../renderer/side-chat-text");
+const chatAnswer = require("../renderer/chat-answer");
 const {
   CONTEXT_MESSAGE_LIMIT,
   applyGroundingPolicy,
-  createMissingSearchSourcesError,
   hasWebSources,
+  isExternallyGrounded,
   prepareSideChatContext,
   requiresWebSearch,
   webSearchPolicy
@@ -23,6 +24,10 @@ const OPENAI_MODEL = "gpt-5.6-terra";
 const GEMINI_MODEL = "gemini-3.6-flash";
 const MAX_GEMINI_REQUEST_BYTES = 19_000_000;
 const MAX_WEB_SOURCES = sideChatRules.limits.webSources;
+// 사이드 채팅 답변은 스트리밍으로 받으므로 전체 대기 한도를 넉넉히 둔다.
+const CHAT_REQUEST_TIMEOUT_MS = 120_000;
+const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
+const GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 
 const MEMORY_SCHEMA = {
   type: "array",
@@ -99,9 +104,6 @@ const GUESS_SCHEMA = {
   },
   required: ["assumption", "question"]
 };
-
-// 사이드 채팅 응답 형식은 Windows·Android가 shared/rules에서 함께 쓴다.
-const CHAT_SCHEMA = sideChatRules.responseSchema;
 
 const GEMINI_SCHEMA_KEYS = new Set(sideChatRules.geminiSchemaKeys);
 
@@ -311,6 +313,28 @@ ${input}
 이 글을 더 정확히 완성하기 위해 정말 필요한 질문 하나만 시작하라.`;
 }
 
+// 이전 검색 답변의 검색어와 출처를 남겨, 후속 질문에서 같은 검색을 되풀이하지 않게 한다.
+function searchMemoryLine(message) {
+  const { limits, prompt } = sideChatRules;
+  const queries = (Array.isArray(message?.searchQueries) ? message.searchQueries : [])
+    .filter((query) => typeof query === "string" && query.trim())
+    .slice(0, limits.searchMemoryQueries)
+    .map((query) => query.trim());
+  const sources = (Array.isArray(message?.sources) ? message.sources : [])
+    .slice(0, limits.searchMemorySources)
+    .map((source) => {
+      const host = chatAnswer.hostOf(source?.url);
+      const title = String(source?.title || host).trim();
+      return host && title !== host ? `${title} (${host})` : title;
+    })
+    .filter(Boolean);
+  if (queries.length === 0 && sources.length === 0) return "";
+  return fillTemplate(prompt.searchMemory, {
+    queries: queries.join(", ") || prompt.empty,
+    sources: sources.join(", ") || prompt.empty
+  });
+}
+
 function buildSideChatPrompt({
   input,
   messages = [],
@@ -339,11 +363,10 @@ function buildSideChatPrompt({
     const content = String(message.content || "").slice(0, remainingCharacters);
     if (!content) continue;
     const role = message.role === "assistant" ? prompt.roles.assistant : prompt.roles.user;
-    const provenance =
-      message.role === "assistant" && message.externalGrounding === true
-        ? ` [${prompt.provenanceMarker}]`
-        : "";
-    selected.unshift(`${role}${provenance}: ${content}`);
+    const external = message.role === "assistant" && message.externalGrounding === true;
+    const provenance = external ? ` [${prompt.provenanceMarker}]` : "";
+    const memory = external ? searchMemoryLine(message) : "";
+    selected.unshift(`${role}${provenance}: ${content}${memory ? `\n${memory}` : ""}`);
     remainingCharacters -= content.length;
   }
   const versions = Array.isArray(writingContext?.versions) ? writingContext.versions : [];
@@ -426,41 +449,6 @@ function normalizeGuess(value) {
   };
 }
 
-function normalizeChatResult(value) {
-  const reply = String(value?.reply ?? value?.text ?? "").trim();
-  if (!reply) throw new Error("AI가 채팅 답변을 반환하지 않았습니다.");
-  const allowedActions = new Set(CHAT_SCHEMA.properties.action.properties.name.enum);
-  const requestedName = String(value?.action?.name || "none");
-  const name = allowedActions.has(requestedName) ? requestedName : "none";
-  const relatedQueries = [];
-  const seenQueries = new Set();
-  if (name === "none") {
-    for (const query of Array.isArray(value?.related_queries)
-      ? value.related_queries
-      : Array.isArray(value?.relatedQueries)
-        ? value.relatedQueries
-        : []) {
-      const normalized = String(query || "")
-        .replace(/\u0000/gu, "")
-        .trim()
-        .slice(0, sideChatRules.limits.relatedQueryCharacters);
-      const key = normalized.toLocaleLowerCase("ko-KR");
-      if (!normalized || seenQueries.has(key)) continue;
-      seenQueries.add(key);
-      relatedQueries.push(normalized);
-      if (relatedQueries.length >= sideChatRules.limits.relatedQueries) break;
-    }
-  }
-  return {
-    reply,
-    action: {
-      name,
-      value: String(value?.action?.value || "").slice(0, sideChatRules.limits.actionValueCharacters)
-    },
-    relatedQueries
-  };
-}
-
 function normalizeWebSource(value) {
   const rawUrl = String(value?.url ?? value?.uri ?? value?.web?.uri ?? "").trim();
   if (!rawUrl) return null;
@@ -494,25 +482,156 @@ function normalizeWebSources(values) {
   return sources;
 }
 
-function extractOpenAISources(payload) {
-  const citations = [];
-  const searchSources = [];
-  for (const item of payload?.output ?? []) {
+// 인용된 출처를 앞에, 검색만 한 출처를 뒤에 둔다. 각 출처에는 인용 여부와 찾은 검색어를 남긴다.
+function buildSources(cited, searched) {
+  const queryByUrl = new Map();
+  for (const value of searched) {
+    const normalized = normalizeWebSource(value);
+    const query = String(value?.query || "").replace(/\u0000/gu, "").trim().slice(0, 120);
+    if (normalized && query && !queryByUrl.has(normalized.url)) queryByUrl.set(normalized.url, query);
+  }
+  const sources = [];
+  const byUrl = new Map();
+  const add = (value, isCited) => {
+    const normalized = normalizeWebSource(value);
+    if (!normalized) return;
+    const existing = byUrl.get(normalized.url);
+    if (existing) {
+      if (isCited) existing.cited = true;
+      return;
+    }
+    if (sources.length >= MAX_WEB_SOURCES) return;
+    const source = { ...normalized, cited: isCited, query: queryByUrl.get(normalized.url) || "" };
+    byUrl.set(normalized.url, source);
+    sources.push(source);
+  };
+  for (const value of cited) add(value, true);
+  for (const value of searched) add(value, false);
+  return sources;
+}
+
+function sourceIndex(sources, url) {
+  const normalized = normalizeWebSource({ url });
+  return normalized ? sources.findIndex((source) => source.url === normalized.url) : -1;
+}
+
+// OpenAI 최종 응답의 글과 url_citation 위치. 여러 글 조각이면 앞 조각 길이만큼 위치를 민다.
+function openAIOutputText(response) {
+  let text = "";
+  const annotations = [];
+  for (const item of response?.output ?? []) {
     for (const part of item?.content ?? []) {
+      if (typeof part?.text !== "string") continue;
+      const offset = text.length;
+      text += part.text;
       for (const annotation of part?.annotations ?? []) {
-        if (annotation?.type === "url_citation") citations.push(annotation);
+        if (annotation?.type !== "url_citation") continue;
+        const citation = annotation.url_citation || annotation;
+        annotations.push({
+          start: offset + Number(citation.start_index),
+          end: offset + Number(citation.end_index),
+          url: citation.url,
+          title: citation.title
+        });
       }
     }
-    if (item?.type === "web_search_call") {
-      searchSources.push(...(item?.action?.sources ?? []));
+  }
+  if (!text && typeof response?.output_text === "string") text = response.output_text;
+  return { text, annotations };
+}
+
+function openAISearchCalls(response) {
+  const queries = [];
+  const sources = [];
+  for (const item of response?.output ?? []) {
+    if (item?.type !== "web_search_call") continue;
+    const action = item.action || {};
+    const itemQueries = [action.query, ...(Array.isArray(action.queries) ? action.queries : [])]
+      .filter((query) => typeof query === "string" && query.trim())
+      .map((query) => query.trim());
+    for (const query of itemQueries) if (!queries.includes(query)) queries.push(query);
+    for (const source of action.sources ?? []) {
+      sources.push({ url: source?.url, title: source?.title, query: itemQueries[0] || "" });
     }
   }
-  return normalizeWebSources([...citations, ...searchSources]);
+  return { queries, sources };
+}
+
+function extractOpenAISources(response) {
+  const { annotations } = openAIOutputText(response);
+  return buildSources(annotations, openAISearchCalls(response).sources);
 }
 
 function extractGeminiSources(payload) {
-  const chunks = payload?.candidates?.[0]?.groundingMetadata?.groundingChunks ?? [];
-  return normalizeWebSources(chunks);
+  const grounding = payload?.candidates?.[0]?.groundingMetadata ?? payload?.groundingMetadata ?? payload;
+  return geminiGrounding(grounding).sources;
+}
+
+// Gemini 근거 조각을 출처로 바꾸고, 근거 문장(groundingSupports)의 위치를 답변 글에서 찾는다.
+function geminiGrounding(grounding, text = "") {
+  const chunks = Array.isArray(grounding?.groundingChunks) ? grounding.groundingChunks : [];
+  const supports = Array.isArray(grounding?.groundingSupports) ? grounding.groundingSupports : [];
+  const citedChunks = new Set(supports.flatMap((support) => support?.groundingChunkIndices ?? []));
+  const ordered = chunks
+    .map((chunk, index) => ({ chunk, index }))
+    .sort(
+      (left, right) =>
+        Number(citedChunks.has(right.index)) - Number(citedChunks.has(left.index)) ||
+        left.index - right.index
+    );
+  const cited = ordered.filter(({ index }) => citedChunks.has(index)).map(({ chunk }) => chunk.web || chunk);
+  const searched = ordered.filter(({ index }) => !citedChunks.has(index)).map(({ chunk }) => chunk.web || chunk);
+  const sources = buildSources(cited, searched);
+  const annotations = [];
+  let cursor = 0;
+  for (const support of supports) {
+    const segment = String(support?.segment?.text || "");
+    if (!segment) continue;
+    let start = text.indexOf(segment, cursor);
+    if (start < 0) start = text.indexOf(segment);
+    if (start < 0) continue;
+    cursor = start + segment.length;
+    for (const chunkIndex of support?.groundingChunkIndices ?? []) {
+      const chunk = chunks[chunkIndex];
+      const source = sourceIndex(sources, chunk?.web?.uri ?? chunk?.uri);
+      if (source >= 0) annotations.push({ start, end: start + segment.length, source });
+    }
+  }
+  const queries = (Array.isArray(grounding?.webSearchQueries) ? grounding.webSearchQueries : [])
+    .filter((query) => typeof query === "string" && query.trim())
+    .map((query) => query.trim());
+  return { sources, annotations, queries };
+}
+
+// 스트리밍으로 받은 전체 답변을 화면용 답변·문장 출처·서식·분류·동작으로 정리한다.
+function composeChatResult({ fullText, annotations, sources, searchQueries, webSearchUsed }, payload) {
+  const parsed = chatAnswer.parseControlBlock(fullText);
+  if (!parsed.answer) throw new Error("AI가 채팅 답변을 반환하지 않았습니다.");
+  const grounded = isExternallyGrounded(
+    { webSearchUsed, sources },
+    { screenContext: payload.screenContext, priorExternalContext: payload.priorExternalContext }
+  );
+  const formatted = chatAnswer.formatAnswer(
+    parsed.answer,
+    annotations.map((annotation) => ({
+      ...annotation,
+      start: annotation.start - parsed.answerOffset,
+      end: annotation.end - parsed.answerOffset
+    })),
+    { cleanLinks: grounded }
+  );
+  const hasSources = sources.length > 0;
+  return {
+    reply: formatted.text,
+    styles: formatted.styles,
+    citations: formatted.citations,
+    sources,
+    searchQueries,
+    category: chatAnswer.finalRole(parsed.role, parsed.action.name, hasSources),
+    action: parsed.action,
+    relatedQueries: parsed.action.name === "none" && hasSources ? parsed.relatedQueries : [],
+    webSearchUsed
+  };
 }
 
 function openAIWebSearchUsed(payload) {
@@ -548,6 +667,73 @@ function createCancelledError() {
   const error = new Error(sideChatLabels.cancelled);
   error.code = "CANCELLED";
   return error;
+}
+
+// text/event-stream 본문을 줄 단위로 읽어 data 줄마다 JSON을 넘긴다. 한글이 조각 경계에서 잘려도 이어 붙인다.
+async function readServerSentEvents(body, onData) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let data = [];
+  const flush = () => {
+    if (data.length === 0) return;
+    const text = data.join("\n");
+    data = [];
+    if (!text || text === "[DONE]") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return;
+    }
+    onData(parsed);
+  };
+  const handleLine = (line) => {
+    if (line === "") flush();
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /u, ""));
+  };
+  for await (const chunk of body) {
+    buffer += typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true });
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      handleLine(buffer.slice(0, newline).replace(/\r$/u, ""));
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer) handleLine(buffer.replace(/\r$/u, ""));
+  flush();
+}
+
+async function fetchEventStream(fetchImpl, url, options, timeoutMs, callerSignal, onData) {
+  if (callerSignal?.aborted) throw createCancelledError();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  callerSignal?.addEventListener?.("abort", abortFromCaller, { once: true });
+  try {
+    const response = await fetchImpl(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      const detail =
+        body?.error?.message || body?.error?.status || `${response.status} ${response.statusText}`;
+      const error = new Error(detail);
+      error.status = response.status;
+      throw error;
+    }
+    if (!response.body) throw new Error("AI 응답을 읽지 못했습니다.");
+    await readServerSentEvents(response.body, onData);
+    if (callerSignal?.aborted) throw createCancelledError();
+  } catch (error) {
+    if (callerSignal?.aborted) throw createCancelledError();
+    if (error?.name === "AbortError") {
+      throw new Error("AI 응답 시간이 너무 길어 요청을 중단했습니다.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener?.("abort", abortFromCaller);
+  }
 }
 
 async function fetchJson(fetchImpl, url, options, timeoutMs = 35_000, callerSignal) {
@@ -606,7 +792,8 @@ function prepareChatPayload(payload) {
     searchRequired: searchPolicy === "required",
     searchDisabled: searchPolicy === "disabled",
     signal: payload?.signal,
-    onProgress: typeof payload?.onProgress === "function" ? payload.onProgress : null
+    onProgress: typeof payload?.onProgress === "function" ? payload.onProgress : null,
+    onDelta: typeof payload?.onDelta === "function" ? payload.onDelta : null
   };
 }
 
@@ -635,13 +822,19 @@ class AIClient {
     if (openAIKey) {
       attempts.push({
         provider: "openai",
-        run: () => this.#callOpenAI(openAIKey, mode, payload)
+        run: () =>
+          mode === "chat"
+            ? this.#callOpenAIChat(openAIKey, payload)
+            : this.#callOpenAI(openAIKey, mode, payload)
       });
     }
     if (geminiKey) {
       attempts.push({
         provider: "gemini",
-        run: () => this.#callGemini(geminiKey, mode, payload)
+        run: () =>
+          mode === "chat"
+            ? this.#callGeminiChat(geminiKey, payload)
+            : this.#callGemini(geminiKey, mode, payload)
       });
     }
     if (attempts.length === 0) {
@@ -651,8 +844,6 @@ class AIClient {
     }
 
     const failures = [];
-    // 검색을 직접 요청했는데 출처가 없던 첫 답변. 모든 공급자가 실패하면 경고와 함께 보여 준다.
-    let sourcelessAnswer = null;
     const finish = (result, provider) => ({
       ...result,
       provider,
@@ -674,12 +865,9 @@ class AIClient {
             screenContext: payload.screenContext,
             priorExternalContext: payload.priorExternalContext
           });
+          // 이미 화면에 흘려 보낸 답변이므로 출처가 없어도 다른 AI로 다시 묻지 않고 표시만 남긴다.
           if (payload.searchRequired && !hasWebSources(result)) {
-            const answer = finish({ ...result, sourcesMissing: true }, attempt.provider);
-            // 화면 이미지는 다른 공급자에게 다시 보내지 않는다.
-            if (payload.screenContext) return answer;
-            sourcelessAnswer ??= answer;
-            throw createMissingSearchSourcesError();
+            result = { ...result, sourcesMissing: true };
           }
         }
         return finish(result, attempt.provider);
@@ -695,7 +883,6 @@ class AIClient {
         }
       }
     }
-    if (sourcelessAnswer) return sourcelessAnswer;
     if (mode === "chat" && payload.searchRequired) {
       const searchError = new Error(
         "웹 검색 출처를 확인하지 못했습니다. 잠시 후 다시 검색해 주세요."
@@ -715,13 +902,8 @@ class AIClient {
         : mode === "chat"
           ? buildSideChatPrompt(payload)
           : buildUserPrompt(payload);
-    const schema = mode === "guess" ? GUESS_SCHEMA : mode === "chat" ? CHAT_SCHEMA : OUTPUT_SCHEMA;
+    const schema = mode === "guess" ? GUESS_SCHEMA : OUTPUT_SCHEMA;
     const userContent = toOpenAIContent(prompt, payload.attachments);
-    if (mode === "chat" && payload.screenContext) {
-      for (const part of userContent) {
-        if (part?.type === "input_image") part.detail = "high";
-      }
-    }
     const request = {
       model: OPENAI_MODEL,
       store: false,
@@ -731,12 +913,7 @@ class AIClient {
           content: [
             {
               type: "input_text",
-              text:
-                mode === "guess"
-                  ? GUESS_SYSTEM_PROMPT
-                  : mode === "chat"
-                    ? CHAT_SYSTEM_PROMPT
-                    : SYSTEM_PROMPT
+              text: mode === "guess" ? GUESS_SYSTEM_PROMPT : SYSTEM_PROMPT
             }
           ]
         },
@@ -745,31 +922,20 @@ class AIClient {
           content: userContent
         }
       ],
-      reasoning: { effort: mode === "chat" ? "medium" : "low" },
+      reasoning: { effort: "low" },
       text: {
-        verbosity: mode === "chat" ? "medium" : "low",
+        verbosity: "low",
         format: {
           type: "json_schema",
-          name:
-            mode === "guess"
-              ? "writing_enhancer_question"
-              : mode === "chat"
-                ? "side_chat_reply"
-                : "writing_enhancer_result",
+          name: mode === "guess" ? "writing_enhancer_question" : "writing_enhancer_result",
           strict: true,
           schema
         }
       }
     };
-    if (mode === "chat" && !payload.searchDisabled) {
-      request.tools = [{ type: "web_search", search_context_size: "high" }];
-      request.tool_choice = payload.searchRequired ? { type: "web_search" } : "auto";
-      request.max_tool_calls = 8;
-      request.include = ["web_search_call.action.sources"];
-    }
     const response = await fetchJson(
       this.fetchImpl,
-      "https://api.openai.com/v1/responses",
+      OPENAI_RESPONSES_URL,
       {
         method: "POST",
         headers: {
@@ -778,22 +944,164 @@ class AIClient {
         },
         body: JSON.stringify(request)
       },
-      mode === "chat" ? 60_000 : 35_000,
+      35_000,
       payload.signal
     );
     const parsed = parseJsonText(extractOpenAIText(response));
     if (mode === "guess") return normalizeGuess(parsed);
-    if (mode === "chat") {
-      const chatResult = normalizeChatResult(parsed);
-      const sources = extractOpenAISources(response);
-      return {
-        ...chatResult,
-        sources,
-        webSearchUsed: openAIWebSearchUsed(response),
-        relatedQueries: sources.length > 0 ? chatResult.relatedQueries : []
-      };
-    }
     return normalizeResult(parsed);
+  }
+
+  // 사이드 채팅: 일반 글 답변을 스트리밍으로 받고, 끝난 뒤 인용 위치와 검색 기록을 정리한다.
+  async #callOpenAIChat(apiKey, payload) {
+    const userContent = toOpenAIContent(buildSideChatPrompt(payload), payload.attachments);
+    if (payload.screenContext) {
+      for (const part of userContent) {
+        if (part?.type === "input_image") part.detail = "high";
+      }
+    }
+    const request = {
+      model: OPENAI_MODEL,
+      store: false,
+      stream: true,
+      input: [
+        { role: "system", content: [{ type: "input_text", text: CHAT_SYSTEM_PROMPT }] },
+        { role: "user", content: userContent }
+      ],
+      reasoning: { effort: "medium" },
+      text: { verbosity: "medium" }
+    };
+    if (!payload.searchDisabled) {
+      request.tools = [{ type: "web_search", search_context_size: "high" }];
+      request.tool_choice = payload.searchRequired ? { type: "web_search" } : "auto";
+      request.max_tool_calls = 8;
+      request.include = ["web_search_call.action.sources"];
+    }
+    let streamed = "";
+    let completed = null;
+    let failure = "";
+    let searching = false;
+    await fetchEventStream(
+      this.fetchImpl,
+      OPENAI_RESPONSES_URL,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          Accept: "text/event-stream"
+        },
+        body: JSON.stringify(request)
+      },
+      CHAT_REQUEST_TIMEOUT_MS,
+      payload.signal,
+      (event) => {
+        const type = String(event?.type || "");
+        if (type === "response.output_text.delta" && typeof event.delta === "string") {
+          streamed += event.delta;
+          payload.onDelta?.(streamed);
+        } else if (type.startsWith("response.web_search_call.") && !searching) {
+          searching = true;
+          payload.onProgress?.({
+            stage: "searching",
+            provider: "openai",
+            searchPolicy: payload.searchPolicy || "none"
+          });
+        } else if (type === "response.completed") {
+          completed = event.response;
+        } else if (type === "response.failed" || type === "response.incomplete" || type === "error") {
+          failure =
+            event?.response?.error?.message ||
+            event?.error?.message ||
+            event?.message ||
+            "AI 응답 중 문제가 생겼습니다.";
+        }
+      }
+    );
+    if (failure) throw new Error(failure);
+    if (!completed) throw new Error("AI 응답이 끝까지 오지 않았습니다.");
+    const output = openAIOutputText(completed);
+    const search = openAISearchCalls(completed);
+    const sources = buildSources(output.annotations, search.sources);
+    return composeChatResult(
+      {
+        fullText: output.text || streamed,
+        annotations: output.annotations
+          .map((annotation) => ({ ...annotation, source: sourceIndex(sources, annotation.url) }))
+          .filter((annotation) => annotation.source >= 0),
+        sources,
+        searchQueries: search.queries,
+        webSearchUsed: openAIWebSearchUsed(completed)
+      },
+      payload
+    );
+  }
+
+  async #callGeminiChat(apiKey, payload) {
+    const request = {
+      systemInstruction: { parts: [{ text: CHAT_SYSTEM_PROMPT }] },
+      contents: [
+        { role: "user", parts: toGeminiParts(buildSideChatPrompt(payload), payload.attachments) }
+      ]
+    };
+    if (!payload.searchDisabled) request.tools = [{ googleSearch: {} }];
+    const requestBody = JSON.stringify(request);
+    if (Buffer.byteLength(requestBody, "utf8") >= MAX_GEMINI_REQUEST_BYTES) {
+      const error = new Error("Gemini에 보낼 참고 자료가 너무 큽니다. 일부 첨부를 빼 주세요.");
+      error.code = "GEMINI_REQUEST_TOO_LARGE";
+      throw error;
+    }
+    let streamed = "";
+    let grounding = null;
+    let failure = "";
+    await fetchEventStream(
+      this.fetchImpl,
+      `${GEMINI_MODELS_URL}/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+          "x-goog-api-key": apiKey
+        },
+        body: requestBody
+      },
+      CHAT_REQUEST_TIMEOUT_MS,
+      payload.signal,
+      (chunk) => {
+        if (chunk?.error) failure = chunk.error.message || "AI 응답 중 문제가 생겼습니다.";
+        const candidate = chunk?.candidates?.[0];
+        const text = (candidate?.content?.parts ?? [])
+          .map((part) => (typeof part?.text === "string" && part.thought !== true ? part.text : ""))
+          .join("");
+        if (text) {
+          streamed += text;
+          payload.onDelta?.(streamed);
+        }
+        if (candidate?.groundingMetadata) {
+          if (!grounding) {
+            payload.onProgress?.({
+              stage: "searching",
+              provider: "gemini",
+              searchPolicy: payload.searchPolicy || "none"
+            });
+          }
+          grounding = candidate.groundingMetadata;
+        }
+      }
+    );
+    if (failure) throw new Error(failure);
+    const found = geminiGrounding(grounding, streamed);
+    return composeChatResult(
+      {
+        fullText: streamed,
+        annotations: found.annotations,
+        sources: found.sources,
+        searchQueries: found.queries,
+        webSearchUsed: geminiWebSearchUsed({ candidates: [{ groundingMetadata: grounding }] })
+      },
+      payload
+    );
   }
 
   async #callGemini(apiKey, mode, payload) {
@@ -803,17 +1111,12 @@ class AIClient {
         : mode === "chat"
           ? buildSideChatPrompt(payload)
           : buildUserPrompt(payload);
-    const schema = mode === "guess" ? GUESS_SCHEMA : mode === "chat" ? CHAT_SCHEMA : OUTPUT_SCHEMA;
+    const schema = mode === "guess" ? GUESS_SCHEMA : OUTPUT_SCHEMA;
     const request = {
       systemInstruction: {
         parts: [
           {
-            text:
-              mode === "guess"
-                ? GUESS_SYSTEM_PROMPT
-                : mode === "chat"
-                  ? CHAT_SYSTEM_PROMPT
-                  : SYSTEM_PROMPT
+            text: mode === "guess" ? GUESS_SYSTEM_PROMPT : SYSTEM_PROMPT
           }
         ]
       },
@@ -828,9 +1131,6 @@ class AIClient {
         responseJsonSchema: toGeminiSchema(schema)
       }
     };
-    if (mode === "chat" && !payload.searchDisabled) {
-      request.tools = [{ googleSearch: {} }];
-    }
     const requestBody = JSON.stringify(request);
     if (Buffer.byteLength(requestBody, "utf8") >= MAX_GEMINI_REQUEST_BYTES) {
       const error = new Error("Gemini에 보낼 참고 자료가 너무 큽니다. 일부 첨부를 빼 주세요.");
@@ -839,7 +1139,7 @@ class AIClient {
     }
     const response = await fetchJson(
       this.fetchImpl,
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+      `${GEMINI_MODELS_URL}/${GEMINI_MODEL}:generateContent`,
       {
         method: "POST",
         headers: {
@@ -848,28 +1148,17 @@ class AIClient {
         },
         body: requestBody
       },
-      mode === "chat" ? 60_000 : 35_000,
+      35_000,
       payload.signal
     );
     const parsed = parseJsonText(extractGeminiText(response));
     if (mode === "guess") return normalizeGuess(parsed);
-    if (mode === "chat") {
-      const chatResult = normalizeChatResult(parsed);
-      const sources = extractGeminiSources(response);
-      return {
-        ...chatResult,
-        sources,
-        webSearchUsed: geminiWebSearchUsed(response),
-        relatedQueries: sources.length > 0 ? chatResult.relatedQueries : []
-      };
-    }
     return normalizeResult(parsed);
   }
 }
 
 module.exports = {
   AIClient,
-  CHAT_SCHEMA,
   GEMINI_MODEL,
   MAX_WEB_SOURCES,
   MAX_GEMINI_REQUEST_BYTES,
@@ -879,6 +1168,7 @@ module.exports = {
   buildGuessPrompt,
   buildSideChatPrompt,
   buildUserPrompt,
+  buildSources,
   hasExplicitLengthDirective,
   extractGeminiText,
   extractGeminiSources,
@@ -889,10 +1179,11 @@ module.exports = {
   normalizeWebSource,
   normalizeWebSources,
   normalizeGuess,
-  normalizeChatResult,
   normalizeResult,
   parseJsonText,
   prepareChatPayload,
+  readServerSentEvents,
+  searchMemoryLine,
   toGeminiSchema,
   requiresWebSearch
 };

@@ -65,9 +65,18 @@ function placeholders(text) {
 }
 
 function validate(rules, cases) {
-  const actionNames = rules.responseSchema?.properties?.action?.properties?.name?.enum;
+  const actionNames = rules.actions?.names;
   if (!Array.isArray(actionNames) || !actionNames.includes("none")) {
-    fail("responseSchema의 action.name.enum에 none이 있어야 합니다.");
+    fail("actions.names에 none이 있어야 합니다.");
+  }
+  if (!Array.isArray(rules.control?.roles) || rules.control.roles.length === 0) {
+    fail("control.roles가 비어 있습니다.");
+  }
+  for (const role of rules.control.roles) {
+    if (role !== "research" && typeof rules.labels.roles[role] !== "string") fail(`역할 이름표가 없습니다: ${role}`);
+  }
+  for (const name of ["queries", "sources"]) {
+    if (!placeholders(rules.prompt.searchMemory).includes(name)) fail(`searchMemory에 {${name}} 자리가 없습니다.`);
   }
   const knownActions = new Set(actionNames);
   for (const name of [
@@ -105,11 +114,27 @@ function validate(rules, cases) {
   for (const entry of cases.confirmation) {
     if (!knownActions.has(entry.action)) fail(`confirmation 사례의 동작: ${entry.action}`);
   }
+  for (const entry of cases.category) {
+    if (!knownActions.has(entry.action)) fail(`category 사례의 동작: ${entry.action}`);
+  }
+  for (const entry of cases.controlBlock) {
+    if (!knownActions.has(entry.action.name)) fail(`controlBlock 사례의 동작: ${entry.action.name}`);
+  }
+  for (const entry of cases.formatAnswer) {
+    for (const annotation of entry.annotations) {
+      if (annotation.match !== undefined && !entry.raw.includes(annotation.match)) {
+        fail(`formatAnswer 사례에 없는 글: ${annotation.match}`);
+      }
+    }
+  }
   return actionNames;
 }
 
 function platformSystemPrompt(rules, platform) {
-  return rules.prompt.system.join("\n").replaceAll("{platform}", rules.prompt.platformNames[platform]);
+  return rules.prompt.system
+    .join("\n")
+    .replaceAll("{platform}", rules.prompt.platformNames[platform])
+    .replaceAll("{actionNames}", rules.actions.names.join(", "));
 }
 
 function desktopData(rules, actionNames) {
@@ -118,7 +143,8 @@ function desktopData(rules, actionNames) {
     version: rules.version,
     limits: rules.limits,
     search: rules.search,
-    actions: { names: actionNames, ...rules.actions },
+    actions: rules.actions,
+    control: rules.control,
     labels: rules.labels,
     prompt: {
       systemPrompt: platformSystemPrompt(rules, "desktop"),
@@ -129,11 +155,11 @@ function desktopData(rules, actionNames) {
       roles: prompt.roles,
       provenanceMarker: prompt.provenanceMarker,
       externalHistoryPresent: prompt.externalHistoryPresent,
+      searchMemory: prompt.searchMemory,
       searchMode: prompt.searchMode,
       screen: prompt.screen
     },
-    geminiSchemaKeys: rules.geminiSchemaKeys,
-    responseSchema: rules.responseSchema
+    geminiSchemaKeys: rules.geminiSchemaKeys
   };
 }
 
@@ -167,11 +193,15 @@ function ktRegex(entry) {
     : `Regex(${kt(entry.pattern)})`;
 }
 
+function ktStrings(values) {
+  return `listOf(${values.map(kt).join(", ")})`;
+}
+
 function ktList(values, render, indent = "        ") {
   return values.map((value) => `${indent}${render(value)},`).join("\n");
 }
 
-function renderAndroidRules(rules, actionNames, geminiSchema) {
+function renderAndroidRules(rules, actionNames) {
   const { limits, labels, prompt } = rules;
   const constant = (name, value) => `    const val ${name} = ${kt(value)}`;
   return `${HEADER_LINES.map((line) => `// ${line}`).join("\n")}
@@ -187,6 +217,8 @@ object SharedSideChatRules {
     const val ACTION_VALUE_CHARACTERS = ${limits.actionValueCharacters}
     const val PENDING_PREVIEW_CHARACTERS = ${limits.pendingPreviewCharacters}
     const val PROGRESS_ELAPSED_AFTER_SECONDS = ${limits.progressElapsedAfterSeconds}
+    const val SEARCH_MEMORY_QUERIES = ${limits.searchMemoryQueries}
+    const val SEARCH_MEMORY_SOURCES = ${limits.searchMemorySources}
 
     val DISABLED_SEARCH_PATTERNS: List<Regex> = listOf(
 ${ktList(rules.search.disabledPatterns, ktRegex)}
@@ -207,6 +239,11 @@ ${ktList(rules.actions.navigation, kt)}
 ${ktList(rules.actions.textValue, kt)}
     )
 
+    const val CONTROL_FENCE = ${kt("```" + rules.control.fence)}
+    val ROLES: Set<String> = linkedSetOf(
+${ktList(rules.control.roles, kt)}
+    )
+
 ${constant("PROGRESS_REQUESTING", labels.progressRequesting)}
 ${constant("PROGRESS_SEARCHING", labels.progressSearching)}
 ${constant("PROGRESS_FALLBACK", labels.progressFallback)}
@@ -223,6 +260,21 @@ ${constant("CANCELLED", labels.cancelled)}
 ${constant("PENDING_DISMISSED", labels.pendingDismissed)}
 ${constant("SEARCH_MODE_ON", labels.searchModeOn)}
 ${constant("SEARCH_MODE_OFF", labels.searchModeOff)}
+${constant("ROLE_COMMAND", labels.roles.command)}
+${constant("ROLE_RESEARCH", labels.roles.research)}
+${constant("ROLE_RESEARCH_WITHOUT_SOURCES", labels.roles.researchWithoutSources)}
+${constant("ROLE_WRITING", labels.roles.writing)}
+${constant("SOURCES_HEADING", labels.sourcesHeading)}
+${constant("SOURCE_DIALOG_TITLE", labels.sourceDialog.title)}
+${constant("SOURCE_DIALOG_SENTENCE_INTRO", labels.sourceDialog.sentenceIntro)}
+${constant("SOURCE_DIALOG_LIST_INTRO", labels.sourceDialog.listIntro)}
+${constant("SOURCE_DIALOG_SITE", labels.sourceDialog.site)}
+${constant("SOURCE_DIALOG_ADDRESS", labels.sourceDialog.address)}
+${constant("SOURCE_DIALOG_QUERY", labels.sourceDialog.query)}
+${constant("SOURCE_DIALOG_REDIRECT_NOTE", labels.sourceDialog.redirectNote)}
+${constant("SOURCE_DIALOG_OPEN_NOTE", labels.sourceDialog.openNote)}
+${constant("SOURCE_DIALOG_CONFIRM", labels.sourceDialog.confirm)}
+${constant("SOURCE_DIALOG_CANCEL", labels.sourceDialog.cancel)}
 
 ${constant("SYSTEM_PROMPT", platformSystemPrompt(rules, "android"))}
 ${constant("USER_PROMPT_TEMPLATE", prompt.userPrompt.join("\n"))}
@@ -233,6 +285,7 @@ ${constant("ROLE_USER", prompt.roles.user)}
 ${constant("ROLE_ASSISTANT", prompt.roles.assistant)}
 ${constant("PROVENANCE_MARKER", prompt.provenanceMarker)}
 ${constant("EXTERNAL_HISTORY_PRESENT", prompt.externalHistoryPresent)}
+${constant("SEARCH_MEMORY", prompt.searchMemory)}
 ${constant("SEARCH_MODE_REQUIRED", prompt.searchMode.required)}
 ${constant("SEARCH_MODE_AUTO", prompt.searchMode.auto)}
 ${constant("SEARCH_MODE_DISABLED", prompt.searchMode.disabled)}
@@ -242,9 +295,6 @@ ${constant("SCREEN_INTRO", prompt.screen.intro)}
 ${constant("SCREEN_REQUIRED", prompt.screen.required)}
 ${constant("SCREEN_AUTO", prompt.screen.auto)}
 ${constant("SCREEN_DISABLED", prompt.screen.disabled)}
-
-${constant("RESPONSE_SCHEMA_JSON", JSON.stringify(rules.responseSchema))}
-${constant("GEMINI_RESPONSE_SCHEMA_JSON", JSON.stringify(geminiSchema))}
 }
 `;
 }
@@ -273,7 +323,9 @@ function desktopPromptFor(desktop, entry) {
       messages: entry.messages.map((message) => ({
         role: message.role,
         content: message.content,
-        externalGrounding: message.external === true
+        externalGrounding: message.external === true,
+        searchQueries: message.searchQueries || [],
+        sources: message.sources || []
       })),
       writingContext: entry.writingContext
     })
@@ -301,14 +353,68 @@ function renderAndroidCases(cases, prompts) {
         entry.preview === null ? "null" : kt(entry.preview)
       })`
   );
+  const streamCases = ktList(
+    cases.streamVisible,
+    (entry) => `StreamVisibleCase(${kt(entry.input)}, ${kt(entry.expected)})`
+  );
+  const controlCases = ktList(
+    cases.controlBlock,
+    (entry) =>
+      `ControlBlockCase(${kt(entry.name)}, ${kt(entry.full)}, ${kt(entry.answer)}, ${entry.answerOffset}, ${kt(
+        entry.role
+      )}, ${kt(entry.action.name)}, ${kt(entry.action.value)}, ${ktStrings(entry.relatedQueries)})`
+  );
+  const categoryCases = ktList(
+    cases.category,
+    (entry) =>
+      `CategoryCase(${kt(entry.role)}, ${kt(entry.action)}, ${entry.hasSources}, ${kt(entry.expected)}, ${kt(
+        entry.label
+      )})`
+  );
+  const formatCases = cases.formatAnswer
+    .map((entry) => {
+      const annotations = entry.annotations
+        .map((annotation) =>
+          annotation.match === undefined
+            ? `AnnotationCase(null, ${annotation.start}, ${annotation.end}, ${annotation.source})`
+            : `AnnotationCase(${kt(annotation.match)}, -1, -1, ${annotation.source})`
+        )
+        .join(", ");
+      const citations = entry.citations
+        .map((citation) => `CitationText(${kt(citation.text)}, listOf(${citation.sources.join(", ")}))`)
+        .join(", ");
+      const styles = entry.styles
+        .map((style) => `StyleText(${kt(style.text)}, ${kt(style.kind)})`)
+        .join(", ");
+      return `        FormatCase(
+            name = ${kt(entry.name)},
+            raw = ${kt(entry.raw)},
+            annotations = listOf(${annotations}),
+            cleanLinks = ${entry.cleanLinks === true},
+            text = ${kt(entry.text)},
+            citations = listOf(${citations}),
+            styles = listOf(${styles}),
+        ),`;
+    })
+    .join("\n");
   const promptCases = cases.prompt
     .map((entry, index) => {
       const context = entry.writingContext;
       const messages = entry.messages
-        .map(
-          (message) =>
-            `                PromptMessage(${kt(message.role)}, ${kt(message.content)}, ${message.external === true}),`
-        )
+        .map((message) => {
+          const extra = [];
+          if (message.searchQueries?.length) extra.push(`searchQueries = ${ktStrings(message.searchQueries)}`);
+          if (message.sources?.length) {
+            extra.push(
+              `sources = listOf(${message.sources
+                .map((source) => `PromptSource(${kt(source.title)}, ${kt(source.url)})`)
+                .join(", ")})`
+            );
+          }
+          return `                PromptMessage(${kt(message.role)}, ${kt(message.content)}, ${message.external === true}${
+            extra.length ? `, ${extra.join(", ")}` : ""
+          }),`;
+        })
         .join("\n");
       return `        PromptCase(
             name = ${kt(entry.name)},
@@ -353,7 +459,53 @@ object SharedSideChatCases {
         val preview: String?,
     )
 
-    data class PromptMessage(val role: String, val content: String, val external: Boolean)
+    data class StreamVisibleCase(val input: String, val expected: String)
+
+    data class ControlBlockCase(
+        val name: String,
+        val full: String,
+        val answer: String,
+        val answerOffset: Int,
+        val role: String,
+        val actionName: String,
+        val actionValue: String,
+        val relatedQueries: List<String>,
+    )
+
+    data class CategoryCase(
+        val role: String,
+        val action: String,
+        val hasSources: Boolean,
+        val expected: String,
+        val label: String,
+    )
+
+    /** match가 있으면 raw에서 처음 찾은 위치, 없으면 start·end를 그대로 쓴다. */
+    data class AnnotationCase(val match: String?, val start: Int, val end: Int, val source: Int)
+
+    data class CitationText(val text: String, val sources: List<Int>)
+
+    data class StyleText(val text: String, val kind: String)
+
+    data class FormatCase(
+        val name: String,
+        val raw: String,
+        val annotations: List<AnnotationCase>,
+        val cleanLinks: Boolean,
+        val text: String,
+        val citations: List<CitationText>,
+        val styles: List<StyleText>,
+    )
+
+    data class PromptSource(val title: String, val url: String)
+
+    data class PromptMessage(
+        val role: String,
+        val content: String,
+        val external: Boolean,
+        val searchQueries: List<String> = emptyList(),
+        val sources: List<PromptSource> = emptyList(),
+    )
 
     data class PromptCase(
         val name: String,
@@ -388,6 +540,22 @@ ${progressCases}
 
     val PENDING_ACTION: List<PendingActionCase> = listOf(
 ${pendingCases}
+    )
+
+    val STREAM_VISIBLE: List<StreamVisibleCase> = listOf(
+${streamCases}
+    )
+
+    val CONTROL_BLOCK: List<ControlBlockCase> = listOf(
+${controlCases}
+    )
+
+    val CATEGORY: List<CategoryCase> = listOf(
+${categoryCases}
+    )
+
+    val FORMAT_ANSWER: List<FormatCase> = listOf(
+${formatCases}
     )
 
     val PROMPT: List<PromptCase> = listOf(
@@ -435,9 +603,8 @@ function main() {
   }
 
   const desktop = loadDesktop();
-  const geminiSchema = desktop.toGeminiSchema(rules.responseSchema);
   const prompts = cases.prompt.map((entry) => desktopPromptFor(desktop, entry));
-  emit(outputs.androidRules, renderAndroidRules(rules, actionNames, geminiSchema));
+  emit(outputs.androidRules, renderAndroidRules(rules, actionNames));
   emit(outputs.androidCases, renderAndroidCases(cases, prompts));
 
   if (check) {

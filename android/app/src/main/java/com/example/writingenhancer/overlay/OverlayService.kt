@@ -12,11 +12,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.graphics.Color
-import android.graphics.BitmapFactory
 import android.graphics.PixelFormat
 import android.graphics.Point
 import android.graphics.Rect
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -39,8 +37,6 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -55,23 +51,13 @@ import com.example.writingenhancer.ai.EnhancementLevelPolicy
 import com.example.writingenhancer.ai.EnhancementRequest
 import com.example.writingenhancer.ai.EnhancementResult
 import com.example.writingenhancer.ai.FollowUpMode
-import com.example.writingenhancer.ai.SearchFollowUpPolicy
 import com.example.writingenhancer.ai.SideChatAction
-import com.example.writingenhancer.ai.SideChatCall
-import com.example.writingenhancer.ai.SideChatDisplayPolicy
-import com.example.writingenhancer.ai.SideChatMessage
-import com.example.writingenhancer.ai.SideChatProgress
-import com.example.writingenhancer.ai.SideChatRequest
-import com.example.writingenhancer.ai.SideChatSearchPolicy
 import com.example.writingenhancer.ai.SideChatWritingContext
-import com.example.writingenhancer.ai.SharedSideChatRules
-import com.example.writingenhancer.ai.WebSource
 import com.example.writingenhancer.capture.BridgeActivity
 import com.example.writingenhancer.capture.ImageCropActivity
 import com.example.writingenhancer.data.DraftState
 import com.example.writingenhancer.data.HistoryEntry
 import com.example.writingenhancer.data.ResultVersion
-import com.example.writingenhancer.data.SideChatPolicy
 import com.example.writingenhancer.data.SideChatStore
 import com.example.writingenhancer.data.WorkspacePolicy
 import com.example.writingenhancer.data.WorkspaceStore
@@ -81,10 +67,10 @@ import com.example.writingenhancer.memory.MemoryStore
 import com.example.writingenhancer.preferences.AppPreferences
 import com.example.writingenhancer.security.SecureStore
 import com.example.writingenhancer.ui.SettingsPanel
-import com.example.writingenhancer.ui.SideChatMessageAction
 import com.example.writingenhancer.ui.EditorOutsideAction
 import com.example.writingenhancer.ui.InlineEditMenuController
 import com.example.writingenhancer.ui.MobileEditorRole
+import com.example.writingenhancer.ui.MobileLayoutProfile
 import com.example.writingenhancer.ui.MobileUiPolicy
 import com.example.writingenhancer.ui.PanelNavigationAction
 import com.example.writingenhancer.ui.PanelScreenState
@@ -93,7 +79,6 @@ import com.example.writingenhancer.ui.PasteFriendlyEditText
 import com.example.writingenhancer.ui.Ui
 import com.example.writingenhancer.ui.UiIcon
 import com.example.writingenhancer.ui.UiIconDrawable
-import com.example.writingenhancer.ui.ChatTextFormatter
 import com.example.writingenhancer.ui.Ui.dp
 import com.example.writingenhancer.ui.WindowDragTouchListener
 import java.io.File
@@ -118,9 +103,6 @@ class OverlayService : Service() {
     private var removeTarget: TextView? = null
     private var panel: PanelController? = null
     private var request: Future<*>? = null
-    private var chatRequest: SideChatCall? = null
-    // 중단·접기 뒤에 늦게 도착한 채팅 응답을 무시하기 위한 요청 번호.
-    private var chatRequestToken = 0L
     private var requestSequence = 0L
     private var activeRequestId = 0L
     private var stopping = false
@@ -282,8 +264,7 @@ class OverlayService : Service() {
         stopping = true
         request?.cancel(true)
         request = null
-        chatRequest?.cancel()
-        chatRequest = null
+        panel?.shutdownSideChat()
         discardPendingChatScreen()
         activeChatScreen?.let(::deleteChatScreenFile)
         activeChatScreen = null
@@ -824,7 +805,6 @@ class OverlayService : Service() {
         private var input: PasteFriendlyEditText? = null
         private var situationInput: PasteFriendlyEditText? = null
         private var answerInput: PasteFriendlyEditText? = null
-        private var chatInput: PasteFriendlyEditText? = null
         private var completeButton: Button? = null
         private var answerPrimaryButton: Button? = null
         private var reenhanceButton: Button? = null
@@ -853,31 +833,125 @@ class OverlayService : Service() {
         private var activeLoadingLabel: String = ""
         private var generationInProgress = false
         private var responsiveRerenderPending = false
-        private var chatBusy = false
-        private var chatDraft = retainedChatDraft
-        private var chatPendingUser = ""
-        private var chatEditingMessageId = ""
-        private var chatClearConfirmation = false
-        private var chatError = ""
-        // 다음 질문 한 번만 웹 검색을 강제한다.
-        private var chatSearchMode = false
-        private var chatActiveForceSearch = false
-        private var chatProgress: SideChatProgress? = null
-        private var chatProgressStartedAt = 0L
-        private var chatProgressLabel: TextView? = null
-        // 검색·화면 자료가 섞인 대화에서 사용자 확인을 기다리는 채팅 제안 동작.
-        private var pendingChatAction: SideChatAction? = null
-        private val chatProgressTicker = object : Runnable {
-            override fun run() {
-                if (!chatBusy || closed) return
-                chatProgressLabel?.text = SideChatDisplayPolicy.progressLabel(
-                    chatProgress,
-                    System.currentTimeMillis() - chatProgressStartedAt,
-                )
-                root.postDelayed(this, 1_000)
+        private val chatHost: SideChatScreen.Host = object : SideChatScreen.Host {
+            override val content: LinearLayout get() = this@PanelController.content
+            override val stickyActions: LinearLayout get() = this@PanelController.stickyActions
+            override val headerHost: LinearLayout get() = this@PanelController.headerHost
+            override val scroll: ScrollView get() = this@PanelController.scroll
+            override val overlayRoot: FrameLayout get() = root
+            override val layoutProfile: MobileLayoutProfile get() = this@PanelController.layoutProfile
+            override val panelWidth: Int get() = panelParams?.width ?: dp(320)
+            override val showingChat: Boolean get() = screenState == PanelScreenState.CHAT && !closed
+            override val acceptsResponses: Boolean
+                get() = !stopping && panel === this@PanelController && !closed
+            override val keyboardVisible: Boolean get() = imeVisible
+
+            override fun focusedEditor(): EditText? = this@PanelController.focusedEditor()
+
+            override fun beginChatSurface(keepKeyboard: Boolean) {
+                if (!keepKeyboard) this@PanelController.hideKeyboard()
+                screenState = PanelScreenState.CHAT
+                this@PanelController.content.removeAllViews()
+                resetViewReferences()
+            }
+
+            override fun hideKeyboard() = this@PanelController.hideKeyboard()
+
+            override fun hideImeOnly() = this@PanelController.hideImeOnly()
+
+            override fun createEditor(
+                hint: String,
+                text: String,
+                minRows: Int,
+                maxRows: Int,
+                textSizeSp: Float,
+            ): PasteFriendlyEditText = backAwareEditText(
+                hintText = hint,
+                textValue = text,
+                minRows = minRows,
+                maxRows = maxRows,
+                textSizeSp = textSizeSp,
+                showEditTools = true,
+            )
+
+            override fun editMenuButton(field: PasteFriendlyEditText): View =
+                editMenuController.menuButton(field)
+
+            override fun actionButton(text: String, color: Int): Button = compactAction(text, color)
+
+            override fun openSettings(anchor: View) = this@PanelController.openSettings(anchor)
+
+            override fun collapse() = close()
+
+            override fun movePanelBy(deltaX: Int, deltaY: Int) =
+                this@PanelController.movePanelBy(deltaX, deltaY)
+
+            override fun persistPanelGeometry() = this@PanelController.persistPanelGeometry()
+
+            override fun returnToWriting() = returnFromSideChat()
+
+            override fun writingContext(): SideChatWritingContext = sideChatWritingContext()
+
+            override fun writingSummary(): String = sideChatWritingSummary()
+
+            override fun executeAction(action: SideChatAction) = executeSideChatAction(action)
+
+            override val pendingVisual: AttachmentRef? get() = pendingChatScreen
+            override var visualNotice: String
+                get() = chatScreenNotice
+                set(value) {
+                    chatScreenNotice = value
+                }
+            override var retainedDraft: String
+                get() = retainedChatDraft
+                set(value) {
+                    retainedChatDraft = value
+                }
+
+            override fun takePendingVisual(): AttachmentRef? = takePendingChatScreen()
+
+            override fun finishVisualRequest(attachment: AttachmentRef?) =
+                finishChatScreenRequest(attachment)
+
+            override fun discardPendingVisual() = discardPendingChatScreen()
+
+            override fun discardActiveVisual() {
+                activeChatScreen?.let(::deleteChatScreenFile)
+                activeChatScreen = null
+            }
+
+            override fun captureScreen() = launchBridge(
+                BridgeActivity.ACTION_CAPTURE_SCREEN,
+                BridgeActivity.TARGET_SIDE_CHAT_SCREEN,
+                affectsWriting = false,
+            )
+
+            override fun pickImage() = launchBridge(
+                BridgeActivity.ACTION_PICK_ATTACHMENT,
+                BridgeActivity.TARGET_SIDE_CHAT_VISUAL,
+                affectsWriting = false,
+            )
+
+            override fun previewVisual(visual: AttachmentRef) {
+                if (bridgeInProgress) return
+                bridgeInProgress = true
+                root.visibility = View.INVISIBLE
+                val preview = Intent(this@OverlayService, ImageCropActivity::class.java)
+                    .putExtra(ImageCropActivity.EXTRA_PATH, visual.path)
+                    .putExtra(ImageCropActivity.EXTRA_NAME, visual.displayName)
+                    .putExtra(ImageCropActivity.EXTRA_SOURCE, visual.source)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                runCatching { startActivity(preview) }
+                    .onFailure {
+                        bridgeInProgress = false
+                        this@OverlayService.restoreAfterBridge()
+                        sideChat.showNotice("이미지 미리보기를 열지 못했어요.")
+                    }
             }
         }
-        private var keepChatKeyboard = false
+        // 사이드 채팅 화면. 대화 상태·AI 요청·스트리밍·출처 확인 창은 SideChatScreen이 맡는다.
+        private val sideChat: SideChatScreen =
+            SideChatScreen(this@OverlayService, chatHost, sideChatStore, aiClient)
         private var situationExpanded = false
         private var toolsExpanded = false
         private val persistRunnable = Runnable {
@@ -1017,7 +1091,7 @@ class OverlayService : Service() {
             configureImeAwareScroll()
             if (lastPanelSurface == PanelSurface.SIDE_CHAT) {
                 chatReturnScreen = writingScreenForSession()
-                renderSideChat()
+                sideChat.render()
             } else {
                 renderWritingState()
             }
@@ -1108,19 +1182,13 @@ class OverlayService : Service() {
             if (closed || !::root.isInitialized) return
             rememberCollapsedSurface()
             runCatching { syncInputs() }
-            if (screenState == PanelScreenState.CHAT) {
-                cancelSideChatRequestForCollapse()
-                retainedChatDraft = chatDraft
-            }
+            // 접을 때는 진행 중인 채팅 답변을 멈추고 일회성 화면·이미지를 지운다.
+            sideChat.prepareCollapse()
             closed = true
             runCatching { mainHandler.removeCallbacks(persistRunnable) }
             runCatching { persistDraft() }
             runCatching { persistPanelGeometry() }
             runCatching { hideKeyboard() }
-            if (screenState == PanelScreenState.CHAT) {
-                discardPendingChatScreen()
-                chatScreenNotice = ""
-            }
             try {
                 runCatching { windowManager.removeView(root) }
             } finally {
@@ -1134,21 +1202,10 @@ class OverlayService : Service() {
             }
         }
 
-        private fun cancelSideChatRequestForCollapse() {
-            if (!chatBusy && chatRequest?.isDone != false) return
-            chatRequest?.cancel()
-            chatRequest = null
-            chatRequestToken += 1
-            chatBusy = false
-            stopChatProgress()
-            if (chatDraft.isBlank()) chatDraft = chatPendingUser
-            chatPendingUser = ""
-            chatError = ""
-            activeChatScreen?.let(::deleteChatScreenFile)
-            activeChatScreen = null
-        }
+        fun shutdownSideChat() = sideChat.shutdown()
 
         fun removeForServiceShutdown() {
+            sideChat.shutdown()
             closed = true
             if (::root.isInitialized) runCatching { windowManager.removeView(root) }
         }
@@ -1168,7 +1225,7 @@ class OverlayService : Service() {
         fun renderCurrentScreen() {
             if (!::root.isInitialized) return
             when {
-                screenState == PanelScreenState.CHAT -> renderSideChat()
+                screenState == PanelScreenState.CHAT -> sideChat.render()
                 session.guessQuestion && session.question.isNotBlank() ->
                     renderGuessQuestion(session.question)
                 session.draft.isBlank() -> renderInput()
@@ -1516,1028 +1573,15 @@ class OverlayService : Service() {
             if (screenState != PanelScreenState.CHAT) {
                 chatReturnScreen = screenState
             }
-            chatEditingMessageId = ""
-            chatClearConfirmation = false
-            chatError = ""
-            screenState = PanelScreenState.CHAT
-            renderSideChat()
+            sideChat.open()
         }
 
-        private fun renderSideChat() {
-            val restoreKeyboard = keepChatKeyboard
-            keepChatKeyboard = false
-            if (!restoreKeyboard) hideKeyboard()
-            screenState = PanelScreenState.CHAT
-            content.removeAllViews()
-            resetViewReferences()
-            renderSideChatHeader()
-            renderSideChatContext()
-
-            if (chatError.isNotBlank()) {
-                content.addView(
-                    Ui.label(
-                        this@OverlayService,
-                        chatError,
-                        12f,
-                        0xFFFF9B9B.toInt(),
-                    ).apply { setPadding(dp(5), 0, dp(5), dp(9)) },
-                )
-            }
-
-            val messages = sideChatStore.list()
-            if (messages.isEmpty() && chatPendingUser.isBlank()) {
-                content.addView(
-                    Ui.label(
-                        this@OverlayService,
-                        "검색부터 글 다듬기까지,\n" +
-                            "필요한 것을 편하게 물어보세요.",
-                        14f,
-                        Ui.PANEL_MUTED,
-                    ).apply {
-                        setPadding(dp(8), dp(20), dp(8), dp(20))
-                        setLineSpacing(0f, 1.18f)
-                    },
-                )
-            } else {
-                messages.forEach(::renderSideChatMessage)
-                if (chatPendingUser.isNotBlank()) {
-                    renderSideChatMessage(
-                        SideChatMessage(
-                            id = "",
-                            role = "user",
-                            content = chatPendingUser,
-                            createdAt = System.currentTimeMillis(),
-                        ),
-                        editable = false,
-                    )
-                }
-            }
-            if (chatBusy) {
-                renderSideChatProgress()
-            } else {
-                pendingChatAction?.let(::renderPendingChatAction)
-            }
-            renderSideChatComposer()
-            scroll.post { scroll.fullScroll(View.FOCUS_DOWN) }
-            if (restoreKeyboard) {
-                focusChatInput(showKeyboard = true)
-            } else {
-                root.requestFocus()
-                root.post {
-                    if (screenState == PanelScreenState.CHAT && !closed) {
-                        root.requestFocus()
-                        hideImeOnly()
-                    }
-                }
-            }
-        }
-
-        @android.annotation.SuppressLint("ClickableViewAccessibility")
-        private fun renderSideChatHeader() {
-            val header = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(3), 0, 0, dp(10))
-                contentDescription = "사이드 채팅 창 이동"
-            }
-            header.addView(
-                Ui.label(this@OverlayService, "사이드 채팅", 18f, Ui.PANEL_TEXT, true).apply {
-                    maxLines = 1
-                    setAutoSizeTextTypeUniformWithConfiguration(10, 18, 1, TypedValue.COMPLEX_UNIT_SP)
-                },
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-            )
-            header.addView(
-                Ui.iconButton(this@OverlayService, UiIcon.NEW, "새 사이드 채팅") { requestNewSideChat() }.apply {
-                    contentDescription = "새 사이드 채팅"
-                    isEnabled = !chatBusy
-                    alpha = if (chatBusy) 0.34f else 1f
-                },
-                LinearLayout.LayoutParams(dp(44), dp(44)),
-            )
-            header.addView(
-                Ui.quietButton(this@OverlayService, "글로") { returnFromSideChat() }.apply {
-                    contentDescription = "글 강화기로 돌아가기"
-                    maxLines = 1
-                    setPadding(dp(4), dp(4), dp(4), dp(4))
-                    setAutoSizeTextTypeUniformWithConfiguration(10, 13, 1, TypedValue.COMPLEX_UNIT_SP)
-                    setTextColor(Ui.ACCENT_TEXT)
-                    background = Ui.interactive(this@OverlayService, Ui.ACCENT_SURFACE)
-                },
-                LinearLayout.LayoutParams(dp(48), dp(44)),
-            )
-            header.addView(
-                Ui.iconButton(this@OverlayService, UiIcon.SETTINGS, "설정") { openSettings(it) },
-                LinearLayout.LayoutParams(dp(44), dp(44)),
-            )
-            header.addView(
-                Ui.iconButton(this@OverlayService, UiIcon.CLOSE, "버블로 접기") { close() },
-                LinearLayout.LayoutParams(dp(44), dp(44)),
-            )
-            header.setOnTouchListener(
-                WindowDragTouchListener(
-                    view = header,
-                    onDelta = { deltaX, deltaY -> movePanelBy(deltaX, deltaY) },
-                    onFinished = { persistPanelGeometry() },
-                ),
-            )
-            headerHost.addView(header)
-        }
-
-        private fun renderSideChatContext() {
-            val contextText = when {
-                session.draft.isNotBlank() ->
-                    "현재 강화 결과 연동 · ${session.versions.size.coerceAtLeast(1)}개 버전"
-                session.rawInput.isNotBlank() || session.situation.isNotBlank() ->
-                    "현재 작성 중인 원문 연동"
-                else -> "자유롭게 대화하기 · 베타"
-            }
-            content.addView(
-                Ui.label(
-                    this@OverlayService,
-                    contextText,
-                    11f,
-                    Ui.PANEL_MUTED,
-                ).apply {
-                    setPadding(dp(4), dp(2), dp(4), dp(10))
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(10) },
-            )
-        }
-
-        private fun renderSideChatMessage(
-            message: SideChatMessage,
-            editable: Boolean = true,
-        ) {
-            val isUser = message.role == "user"
-            val visibleContent = if (isUser) {
-                message.content
-            } else {
-                SideChatDisplayPolicy.clean(
-                    message.content,
-                    message.sources.isNotEmpty() || message.untrustedExternalContext,
-                )
-            }
-            val row = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = if (isUser) Gravity.END else Gravity.START
-                setPadding(0, dp(4), 0, dp(4))
-            }
-            if (isUser && editable && chatEditingMessageId == message.id) {
-                val editorStack = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.END
-                }
-                val editor = backAwareEditText(
-                    hintText = "사용자 메시지 수정",
-                    textValue = message.content,
-                    minRows = 2,
-                    maxRows = layoutProfile.answerMaxRows,
-                    textSizeSp = 13f,
-                    showEditTools = true,
-                )
-                editorStack.addView(
-                    editor,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ),
-                )
-                val actions = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.END
-                }
-                actions.addView(
-                    Ui.quietButton(this@OverlayService, "취소") {
-                        chatEditingMessageId = ""
-                        renderSideChat()
-                    },
-                )
-                actions.addView(
-                    Ui.quietButton(this@OverlayService, "수정 완료") {
-                        editSideChatMessage(message.id, editor.text?.toString().orEmpty())
-                    },
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        dp(38),
-                    ).apply { marginStart = dp(6) },
-                )
-                editorStack.addView(
-                    actions,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(38),
-                    ).apply { topMargin = dp(5) },
-                )
-                row.addView(
-                    editorStack,
-                    LinearLayout.LayoutParams(
-                        (panelParams?.width ?: dp(320)) * 4 / 5,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ),
-                )
-            } else {
-                val messageAction = MobileUiPolicy.sideChatMessageAction(
-                    role = message.role,
-                    editable = editable,
-                    busy = chatBusy,
-                    hasMessageId = message.id.isNotBlank(),
-                    hasContent = message.content.isNotBlank(),
-                )
-                val actionSpace = if (messageAction != SideChatMessageAction.NONE) {
-                    dp(44)
-                } else {
-                    0
-                }
-                val availableWidth = (panelParams?.width ?: dp(320)) -
-                    dp(layoutProfile.horizontalPaddingDp * 2) - actionSpace - dp(5)
-                val maximumBubbleWidth = if (isUser) (availableWidth * 0.88f).toInt() else availableWidth
-                val bubble = Ui.label(
-                    this@OverlayService,
-                    visibleContent,
-                    15f,
-                    Ui.PANEL_TEXT,
-                ).apply {
-                    maxWidth = maximumBubbleWidth
-                    setPadding(dp(14), dp(13), dp(14), dp(13))
-                    setLineSpacing(dp(2).toFloat(), 1.22f)
-                    background = Ui.rounded(
-                        if (isUser) Ui.ACCENT_SURFACE else Ui.PANEL_RAISED,
-                        18,
-                        this@OverlayService,
-                    )
-                    if (!isUser) {
-                        text = ChatTextFormatter.render(visibleContent)
-                        setTextIsSelectable(true)
-                    }
-                }
-                if (messageAction == SideChatMessageAction.EDIT_LEFT) {
-                    row.addView(
-                        Ui.iconButton(this@OverlayService, UiIcon.EDIT, "이 메시지 수정") {
-                            chatEditingMessageId = message.id
-                            chatClearConfirmation = false
-                            renderSideChat()
-                        }.apply { contentDescription = "이 메시지 수정" },
-                        LinearLayout.LayoutParams(
-                            dp(44),
-                            dp(44),
-                        ).apply { marginEnd = dp(5) },
-                    )
-                }
-                val bubbleStack = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.VERTICAL
-                    gravity = Gravity.START
-                    addView(
-                        bubble,
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ),
-                    )
-                    if (!isUser && message.sourcesMissing) {
-                        addView(
-                            Ui.label(
-                                this@OverlayService,
-                                SideChatDisplayPolicy.SOURCES_MISSING_NOTE,
-                                12f,
-                                0xFFFFD58A.toInt(),
-                            ).apply {
-                                maxWidth = maximumBubbleWidth
-                                setPadding(dp(10), dp(7), dp(10), dp(7))
-                                setLineSpacing(dp(1).toFloat(), 1.15f)
-                                background = Ui.rounded(0x33E0A23A, 10, this@OverlayService)
-                            },
-                            LinearLayout.LayoutParams(
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                                ViewGroup.LayoutParams.WRAP_CONTENT,
-                            ).apply { topMargin = dp(5) },
-                        )
-                    }
-                    if (!isUser && message.sources.isNotEmpty()) {
-                        addView(renderSideChatSources(message.sources, maximumBubbleWidth))
-                    }
-                    if (!isUser && message.followUpQueries.isNotEmpty()) {
-                        addView(
-                            renderSideChatFollowUps(
-                                message.followUpQueries,
-                                maximumBubbleWidth,
-                            ),
-                        )
-                    }
-                }
-                row.addView(
-                    bubbleStack,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ),
-                )
-                if (messageAction == SideChatMessageAction.COPY_RIGHT) {
-                    row.addView(
-                        Ui.iconButton(this@OverlayService, UiIcon.COPY, "선택한 부분 또는 전체 AI 답변 복사") {
-                            copySideChatAnswer(bubble, bubble.text.toString())
-                        }.apply {
-                            contentDescription = "선택한 부분 또는 전체 AI 답변 복사"
-                        },
-                        LinearLayout.LayoutParams(
-                            dp(44),
-                            dp(44),
-                        ).apply { marginStart = dp(5) },
-                    )
-                }
-            }
-            content.addView(
-                row,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-        }
-
-        private fun renderSideChatProgress() {
-            val label = Ui.label(
-                this@OverlayService,
-                SideChatDisplayPolicy.progressLabel(
-                    chatProgress,
-                    System.currentTimeMillis() - chatProgressStartedAt,
-                ),
-                13f,
-                Ui.PANEL_MUTED,
-                true,
-            ).apply {
-                setPadding(dp(14), dp(11), dp(14), dp(11))
-                background = Ui.rounded(Ui.PANEL_RAISED, 18, this@OverlayService)
-                contentDescription = "AI가 답변 중"
-            }
-            chatProgressLabel = label
-            content.addView(
-                LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.START
-                    setPadding(0, dp(4), 0, dp(4))
-                    addView(label)
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-        }
-
-        private fun renderPendingChatAction(action: SideChatAction) {
-            val card = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(13), dp(12), dp(13), dp(10))
-                background = Ui.rounded(Ui.ACCENT_SURFACE, 16, this@OverlayService)
-                contentDescription = "제안 적용 확인"
-            }
-            card.addView(
-                Ui.label(this@OverlayService, SharedSideChatRules.PENDING_TITLE, 14f, Ui.PANEL_TEXT, true),
-            )
-            card.addView(
-                Ui.label(
-                    this@OverlayService,
-                    SideChatDisplayPolicy.pendingActionLabel(action),
-                    13f,
-                    Ui.ACCENT_TEXT,
-                    true,
-                ).apply { setPadding(0, dp(5), 0, 0) },
-            )
-            SideChatDisplayPolicy.pendingActionPreview(action)?.let { preview ->
-                card.addView(
-                    Ui.label(this@OverlayService, preview, 13f, Ui.PANEL_TEXT).apply {
-                        setPadding(dp(10), dp(8), dp(10), dp(8))
-                        setLineSpacing(dp(1).toFloat(), 1.18f)
-                        maxLines = 8
-                        ellipsize = TextUtils.TruncateAt.END
-                        background = Ui.rounded(Ui.PANEL_FIELD, 10, this@OverlayService)
-                    },
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { topMargin = dp(8) },
-                )
-            }
-            card.addView(
-                Ui.label(
-                    this@OverlayService,
-                    SharedSideChatRules.PENDING_NOTE,
-                    11f,
-                    Ui.PANEL_MUTED,
-                ).apply { setPadding(0, dp(8), 0, dp(8)) },
-            )
-            val buttons = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END
-            }
-            buttons.addView(
-                Ui.quietButton(this@OverlayService, "취소") { dismissPendingChatAction() },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)),
-            )
-            buttons.addView(
-                compactAction("적용", Ui.ACCENT).apply {
-                    contentDescription = "제안한 변경 적용"
-                    setOnClickListener { applyPendingChatAction() }
-                },
-                LinearLayout.LayoutParams(dp(84), dp(44)).apply { marginStart = dp(6) },
-            )
-            card.addView(
-                buttons,
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)),
-            )
-            content.addView(
-                card,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topMargin = dp(6)
-                    bottomMargin = dp(4)
-                },
-            )
-        }
-
-        private fun applyPendingChatAction() {
-            val action = pendingChatAction ?: return
-            if (chatBusy) return
-            pendingChatAction = null
-            executeSideChatAction(action)
-            if (screenState == PanelScreenState.CHAT && !closed) renderSideChat()
-        }
-
-        private fun dismissPendingChatAction() {
-            if (pendingChatAction == null) return
-            pendingChatAction = null
-            chatScreenNotice = SharedSideChatRules.PENDING_DISMISSED
-            renderSideChat()
-        }
-
-        private fun startChatProgress() {
-            chatProgress = null
-            chatProgressStartedAt = System.currentTimeMillis()
-            root.removeCallbacks(chatProgressTicker)
-            root.postDelayed(chatProgressTicker, 1_000)
-        }
-
-        private fun stopChatProgress() {
-            if (::root.isInitialized) root.removeCallbacks(chatProgressTicker)
-            chatProgress = null
-            chatProgressStartedAt = 0L
-            chatProgressLabel = null
-        }
-
-        private fun stopSideChatReply() {
-            if (!chatBusy) return
-            chatRequest?.cancel()
-            chatRequest = null
-            chatRequestToken += 1
-            chatBusy = false
-            stopChatProgress()
-            activeChatScreen?.let(::deleteChatScreenFile)
-            activeChatScreen = null
-            if (chatPendingUser.isNotBlank()) {
-                chatDraft = chatPendingUser
-                retainedChatDraft = chatPendingUser
-            }
-            chatSearchMode = chatActiveForceSearch
-            chatPendingUser = ""
-            chatError = ""
-            chatScreenNotice = SharedSideChatRules.CANCELLED
-            renderSideChat()
-        }
-
-        private fun renderSideChatSources(
-            sources: List<WebSource>,
-            maximumWidth: Int,
-        ): View {
-            return LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(4), dp(5), dp(2), 0)
-                val sourceDetails = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.VERTICAL
-                    visibility = View.GONE
-                }
-                val toggle = Ui.label(
-                    this@OverlayService,
-                    "출처 ${sources.size.coerceAtMost(6)}개 보기  ▾",
-                    10f,
-                    0xFFD8D2F0.toInt(),
-                    true,
-                ).apply {
-                    textSize = 12f
-                    maxWidth = maximumWidth
-                    minHeight = dp(44)
-                    gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(9), dp(4), dp(9), dp(4))
-                    background = Ui.interactive(this@OverlayService, Color.TRANSPARENT)
-                    isClickable = true
-                    isFocusable = true
-                    contentDescription = "답변 출처 펼치기"
-                    setOnClickListener {
-                        val opening = sourceDetails.visibility != View.VISIBLE
-                        sourceDetails.visibility = if (opening) View.VISIBLE else View.GONE
-                        text = if (opening) {
-                            "출처 ${sources.size.coerceAtMost(6)}개 접기  ▴"
-                        } else {
-                            "출처 ${sources.size.coerceAtMost(6)}개 보기  ▾"
-                        }
-                        contentDescription = if (opening) "답변 출처 접기" else "답변 출처 펼치기"
-                    }
-                }
-                addView(
-                    toggle,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        dp(44),
-                    ),
-                )
-                sources.take(6).forEachIndexed { index, source ->
-                    val host = runCatching { Uri.parse(source.url).host.orEmpty() }.getOrDefault("")
-                    sourceDetails.addView(
-                        Ui.label(
-                            this@OverlayService,
-                            buildString {
-                                append("${index + 1}. ${source.title}")
-                                if (host.isNotBlank()) append("\n$host")
-                            },
-                            10f,
-                            0xFFD8D2F0.toInt(),
-                            true,
-                        ).apply {
-                            textSize = 12f
-                            maxWidth = maximumWidth
-                            maxLines = 2
-                            ellipsize = TextUtils.TruncateAt.END
-                            minHeight = dp(48)
-                            gravity = Gravity.CENTER_VERTICAL
-                            setPadding(dp(9), dp(4), dp(9), dp(4))
-                            background = Ui.rounded(
-                                0x243E2B72,
-                                9,
-                                this@OverlayService,
-                            )
-                            contentDescription = "출처 ${index + 1} 열기: ${source.title}"
-                            isClickable = true
-                            isFocusable = true
-                            setOnClickListener { openSideChatSource(source) }
-                        },
-                        LinearLayout.LayoutParams(
-                            ViewGroup.LayoutParams.MATCH_PARENT,
-                            ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ).apply { topMargin = dp(3) },
-                    )
-                }
-                addView(
-                    sourceDetails,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ),
-                )
-            }
-        }
-
-        private fun openSideChatSource(source: WebSource) {
-            val uri = runCatching { Uri.parse(source.url) }.getOrNull()
-            if (uri == null || uri.scheme !in setOf("https", "http")) {
-                Toast.makeText(
-                    this@OverlayService,
-                    "출처 링크를 열지 못했어요.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-                return
-            }
-            runCatching {
-                startActivity(
-                    Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }.onFailure {
-                Toast.makeText(
-                    this@OverlayService,
-                    "출처 링크를 열 수 있는 앱이 없어요.",
-                    Toast.LENGTH_SHORT,
-                ).show()
-            }
-        }
-
-        private fun renderSideChatFollowUps(
-            queries: List<String>,
-            maximumWidth: Int,
-        ): View = LinearLayout(this@OverlayService).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(7), dp(2), 0)
-            addView(
-                Ui.label(
-                    this@OverlayService,
-                    "이어서 탐색",
-                    10f,
-                    0xFFAAA3BC.toInt(),
-                    true,
-                ),
-            )
-            val chipRow = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-            }
-            queries.take(3).forEach { query ->
-                chipRow.addView(
-                    Ui.label(
-                        this@OverlayService,
-                        "› $query",
-                        10f,
-                        0xFFE4DFFF.toInt(),
-                        true,
-                    ).apply {
-                        textSize = 12f
-                        maxWidth = (maximumWidth * 4 / 5).coerceAtLeast(dp(140))
-                        maxLines = 2
-                        ellipsize = TextUtils.TruncateAt.END
-                        minHeight = dp(48)
-                        gravity = Gravity.CENTER_VERTICAL
-                        setPadding(dp(8), dp(7), dp(8), dp(7))
-                        background = Ui.interactive(this@OverlayService, Ui.PANEL_RAISED, 12)
-                        contentDescription = "후속 검색 바로 실행: $query"
-                        isClickable = true
-                        isFocusable = true
-                        setOnClickListener { applySideChatFollowUp(query) }
-                    },
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { marginEnd = dp(5) },
-                )
-            }
-            addView(
-                HorizontalScrollView(this@OverlayService).apply {
-                    isHorizontalScrollBarEnabled = false
-                    isFillViewport = false
-                    addView(chipRow)
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { topMargin = dp(3) },
-            )
-        }
-
-        private fun applySideChatFollowUp(query: String) {
-            if (
-                !SideChatSearchPolicy.canSubmitFollowUp(
-                    query = query,
-                    busy = chatBusy,
-                    clearConfirmation = chatClearConfirmation,
-                )
-            ) return
-            val normalized = SearchFollowUpPolicy
-                .normalize(listOf(query))
-                .first()
-            chatDraft = normalized
-            chatInput?.apply {
-                setText(normalized)
-                setSelection(normalized.length)
-            }
-            chatError = ""
-            keepChatKeyboard = false
-            sendSideChatMessage(
-                restoreKeyboardOverride = false,
-                forceSearch = true,
-            )
-        }
-
-        private fun renderSideChatComposer() {
-            pendingChatScreen?.let { visual ->
-                val previewCard = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.VERTICAL
-                    setPadding(dp(7), dp(7), dp(7), dp(6))
-                    background = Ui.rounded(0x333E2B72, 12, this@OverlayService)
-                }
-                val previewImage = ImageView(this@OverlayService).apply {
-                    scaleType = ImageView.ScaleType.CENTER_CROP
-                    adjustViewBounds = false
-                    contentDescription = "검색 전 이미지 미리보기 · 영역 선택 열기"
-                    background = Ui.rounded(0xFF24232B.toInt(), 10, this@OverlayService)
-                    decodeChatVisualPreview(visual.path)?.let(::setImageBitmap)
-                    setOnClickListener { openSideChatVisualPreview(visual) }
-                }
-                previewCard.addView(
-                    previewImage,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(104),
-                    ),
-                )
-                val previewActions = LinearLayout(this@OverlayService).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    addView(
-                        Ui.label(
-                            this@OverlayService,
-                            visual.displayName,
-                            10f,
-                            0xFFD8D2F0.toInt(),
-                            true,
-                        ).apply {
-                            maxLines = 1
-                            ellipsize = TextUtils.TruncateAt.END
-                        },
-                        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-                    )
-                    addView(
-                        Ui.quietButton(this@OverlayService, "영역 선택") {
-                            openSideChatVisualPreview(visual)
-                        }.apply { contentDescription = "이미지 부분 영역 선택" },
-                    )
-                    addView(
-                        Ui.quietButton(this@OverlayService, "×") {
-                            discardPendingChatScreen()
-                            chatScreenNotice = "이미지 사용을 해제했어요."
-                            renderSideChat()
-                        }.apply { contentDescription = "검색 이미지 제거" },
-                        LinearLayout.LayoutParams(dp(42), dp(38)).apply { marginStart = dp(4) },
-                    )
-                }
-                previewCard.addView(
-                    previewActions,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        dp(40),
-                    ).apply { topMargin = dp(4) },
-                )
-                stickyActions.addView(
-                    previewCard,
-                    LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ).apply { bottomMargin = dp(6) },
-                )
-            }
-            val screenRow = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            screenRow.addView(
-                Ui.quietButton(
-                    this@OverlayService,
-                    "▣ 화면",
-                ) { toggleSideChatScreen() }.apply {
-                    isEnabled = !chatBusy && !chatClearConfirmation
-                    alpha = if (isEnabled) 1f else 0.4f
-                    contentDescription = "현재 화면 한 장을 촬영해 다음 질문에 함께 보내기"
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    dp(48),
-                ),
-            )
-            screenRow.addView(
-                Ui.quietButton(
-                    this@OverlayService,
-                    "▧ 이미지",
-                ) { pickSideChatImage() }.apply {
-                    isEnabled = !chatBusy && !chatClearConfirmation
-                    alpha = if (isEnabled) 1f else 0.4f
-                    contentDescription = "질문에 함께 보낼 이미지 파일 첨부"
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    dp(48),
-                ).apply { marginStart = dp(5) },
-            )
-            screenRow.addView(
-                Ui.quietButton(
-                    this@OverlayService,
-                    if (chatSearchMode) "⌕ 검색 켬" else "⌕ 검색",
-                ) { toggleSideChatSearchMode() }.apply {
-                    isEnabled = !chatBusy && !chatClearConfirmation
-                    alpha = if (isEnabled) 1f else 0.4f
-                    if (chatSearchMode) {
-                        setTextColor(Ui.ACCENT_TEXT)
-                        background = Ui.interactive(this@OverlayService, Ui.ACCENT_SURFACE, 12)
-                    }
-                    contentDescription = if (chatSearchMode) {
-                        "다음 질문 웹 검색 켜짐. 누르면 끕니다"
-                    } else {
-                        "다음 질문을 웹에서 검색"
-                    }
-                },
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    dp(48),
-                ).apply { marginStart = dp(5) },
-            )
-            if (chatScreenNotice.isNotBlank()) {
-                screenRow.addView(
-                    Ui.label(
-                        this@OverlayService,
-                        chatScreenNotice,
-                        10f,
-                        if (chatScreenNotice.startsWith("화면을 가져오지")) {
-                            0xFFFF9B9B.toInt()
-                        } else {
-                            Ui.PANEL_MUTED
-                        },
-                    ).apply {
-                        maxLines = 2
-                        ellipsize = TextUtils.TruncateAt.END
-                        setPadding(dp(7), 0, 0, 0)
-                    },
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
-                )
-            }
-            stickyActions.addView(
-                screenRow,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(5) },
-            )
-            chatInput = backAwareEditText(
-                hintText = "사이드 채팅에 입력",
-                textValue = chatDraft,
-                minRows = 1,
-                maxRows = layoutProfile.answerMaxRows,
-                textSizeSp = 15f,
-                showEditTools = true,
-            ).also { field ->
-                field.isEnabled = !chatBusy && !chatClearConfirmation
-                field.imeOptions = EditorInfo.IME_ACTION_SEND
-                field.setOnEditorActionListener { _, actionId, _ ->
-                    if (actionId == EditorInfo.IME_ACTION_SEND) {
-                        sendSideChatMessage()
-                        true
-                    } else {
-                        false
-                    }
-                }
-                field.addTextChangedListener(
-                    object : TextWatcher {
-                        override fun beforeTextChanged(
-                            text: CharSequence?,
-                            start: Int,
-                            count: Int,
-                            after: Int,
-                        ) = Unit
-
-                        override fun onTextChanged(
-                            text: CharSequence?,
-                            start: Int,
-                            before: Int,
-                            count: Int,
-                        ) {
-                            chatDraft = text?.toString().orEmpty()
-                        }
-
-                        override fun afterTextChanged(editable: Editable?) = Unit
-                    },
-                )
-            }
-            chatInput?.let { field ->
-                screenRow.addView(
-                    editMenuController.menuButton(field).apply {
-                        contentDescription = "사이드 채팅 편집 메뉴"
-                    },
-                    2,
-                    LinearLayout.LayoutParams(dp(48), dp(48)).apply {
-                        marginStart = dp(5)
-                    },
-                )
-            }
-            stickyActions.addView(
-                chatInput,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-
-            if (chatClearConfirmation) {
-                stickyActions.addView(
-                    Ui.label(
-                        this@OverlayService,
-                        "현재 사이드 채팅 대화만 지울까요?",
-                        12f,
-                        Ui.PANEL_MUTED,
-                    ).apply { setPadding(dp(4), dp(7), 0, dp(4)) },
-                )
-            }
-
-            val row = LinearLayout(this@OverlayService).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            if (chatClearConfirmation) {
-                row.addView(
-                    compactAction("취소", Ui.PANEL_FIELD).apply {
-                        setOnClickListener {
-                            chatClearConfirmation = false
-                            renderSideChat()
-                        }
-                    },
-                    LinearLayout.LayoutParams(0, dp(layoutProfile.actionHeightDp), 1f),
-                )
-                row.addView(
-                    compactAction("지우기", 0xFF7C3844.toInt()).apply {
-                        setOnClickListener { clearSideChat() }
-                    },
-                    LinearLayout.LayoutParams(0, dp(layoutProfile.actionHeightDp), 1f).apply {
-                        marginStart = dp(6)
-                    },
-                )
-            } else {
-                row.addView(
-                    compactAction(
-                        if (chatBusy) "중단" else "보내기",
-                        if (chatBusy) 0xFF3A3550.toInt() else Ui.ACCENT,
-                    ).apply {
-                        contentDescription = if (chatBusy) "답변 중단" else "메시지 보내기"
-                        setOnClickListener {
-                            if (chatBusy) stopSideChatReply() else sendSideChatMessage()
-                        }
-                    },
-                    LinearLayout.LayoutParams(0, dp(layoutProfile.actionHeightDp), 1f),
-                )
-            }
-            stickyActions.addView(
-                row,
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(layoutProfile.actionHeightDp),
-                ).apply { topMargin = dp(6) },
-            )
-        }
-
-        private fun toggleSideChatSearchMode() {
-            if (chatBusy || chatClearConfirmation) return
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            chatSearchMode = !chatSearchMode
-            chatScreenNotice = if (chatSearchMode) {
-                SharedSideChatRules.SEARCH_MODE_ON
-            } else {
-                SharedSideChatRules.SEARCH_MODE_OFF
-            }
-            keepChatKeyboard = focusedEditor() === chatInput || imeVisible
-            renderSideChat()
-        }
-
-        private fun toggleSideChatScreen() {
-            if (chatBusy || chatClearConfirmation) return
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            chatScreenNotice = "화면 공유 권한을 확인하는 중…"
-            launchBridge(
-                BridgeActivity.ACTION_CAPTURE_SCREEN,
-                BridgeActivity.TARGET_SIDE_CHAT_SCREEN,
-                affectsWriting = false,
-            )
-        }
-
-        private fun pickSideChatImage() {
-            if (chatBusy || chatClearConfirmation) return
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            chatScreenNotice = "이미지 선택기를 여는 중…"
-            launchBridge(
-                BridgeActivity.ACTION_PICK_ATTACHMENT,
-                BridgeActivity.TARGET_SIDE_CHAT_VISUAL,
-                affectsWriting = false,
-            )
-        }
-
-        private fun decodeChatVisualPreview(path: String): android.graphics.Bitmap? {
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(path, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-            var sample = 1
-            while (bounds.outWidth / sample > 720 || bounds.outHeight / sample > 720) {
-                sample *= 2
-            }
-            return runCatching {
-                BitmapFactory.decodeFile(
-                    path,
-                    BitmapFactory.Options().apply { inSampleSize = sample.coerceAtLeast(1) },
-                )
-            }.getOrNull()
-        }
-
-        private fun openSideChatVisualPreview(visual: AttachmentRef) {
-            if (chatBusy || bridgeInProgress) return
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            hideKeyboard()
-            bridgeInProgress = true
-            root.visibility = View.INVISIBLE
-            val preview = Intent(this@OverlayService, ImageCropActivity::class.java)
-                .putExtra(ImageCropActivity.EXTRA_PATH, visual.path)
-                .putExtra(ImageCropActivity.EXTRA_NAME, visual.displayName)
-                .putExtra(ImageCropActivity.EXTRA_SOURCE, visual.source)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-            runCatching { startActivity(preview) }
-                .onFailure {
-                    bridgeInProgress = false
-                    restoreAfterBridge()
-                    chatScreenNotice = "이미지 미리보기를 열지 못했어요."
-                    renderSideChat()
-                }
+        private fun sideChatWritingSummary(): String = when {
+            session.draft.isNotBlank() ->
+                "현재 강화 결과 연동 · ${session.versions.size.coerceAtLeast(1)}개 버전"
+            session.rawInput.isNotBlank() || session.situation.isNotBlank() ->
+                "현재 작성 중인 원문 연동"
+            else -> "자유롭게 대화하기 · 베타"
         }
 
         private fun sideChatWritingContext(): SideChatWritingContext =
@@ -2558,220 +1602,8 @@ class OverlayService : Service() {
                 attachmentNames = session.attachments.map { it.displayName },
             )
 
-        private fun sendSideChatMessage(
-            restoreKeyboardOverride: Boolean? = null,
-            forceSearch: Boolean = false,
-        ) {
-            if (chatBusy || chatRequest?.isDone == false) return
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            val inputText = SideChatPolicy.clean("user", chatDraft)
-            if (inputText.isBlank()) {
-                chatError = "메시지를 먼저 입력해 주세요."
-                renderSideChat()
-                return
-            }
-            val previous = sideChatStore.list()
-            val restoreKeyboard = restoreKeyboardOverride
-                ?: (focusedEditor() === chatInput || imeVisible)
-            val screenContext = takePendingChatScreen()
-            val requestForceSearch = forceSearch || chatSearchMode
-            chatSearchMode = false
-            pendingChatAction = null
-            chatDraft = ""
-            chatPendingUser = inputText
-            chatError = ""
-            chatBusy = true
-            keepChatKeyboard = restoreKeyboard
-            renderSideChat()
-            requestSideChat(
-                inputText = inputText,
-                previousMessages = previous,
-                editedMessageAlreadyStored = false,
-                restoreKeyboard = restoreKeyboard,
-                screenContext = screenContext,
-                forceSearch = requestForceSearch,
-            )
-        }
-
-        private fun editSideChatMessage(messageId: String, text: String) {
-            if (chatBusy || chatRequest?.isDone == false) return
-            val cleaned = SideChatPolicy.clean("user", text)
-            if (cleaned.isBlank()) {
-                chatError = "수정할 메시지를 입력해 주세요."
-                renderSideChat()
-                return
-            }
-            val rewritten = sideChatStore.rewriteFromUser(messageId, cleaned)
-            if (rewritten == null) {
-                chatEditingMessageId = ""
-                chatError = "수정할 메시지를 찾지 못했어요."
-                renderSideChat()
-                return
-            }
-            val restoreKeyboard = focusedEditor() != null || imeVisible
-            val screenContext = takePendingChatScreen()
-            pendingChatAction = null
-            chatEditingMessageId = ""
-            chatPendingUser = ""
-            chatError = ""
-            chatBusy = true
-            keepChatKeyboard = restoreKeyboard
-            renderSideChat()
-            requestSideChat(
-                inputText = cleaned,
-                previousMessages = rewritten.dropLast(1),
-                editedMessageAlreadyStored = true,
-                restoreKeyboard = restoreKeyboard,
-                screenContext = screenContext,
-            )
-        }
-
-        private fun requestSideChat(
-            inputText: String,
-            previousMessages: List<SideChatMessage>,
-            editedMessageAlreadyStored: Boolean,
-            restoreKeyboard: Boolean,
-            screenContext: AttachmentRef?,
-            forceSearch: Boolean = false,
-        ) {
-            val token = ++chatRequestToken
-            chatActiveForceSearch = forceSearch
-            startChatProgress()
-            chatRequest = aiClient.chat(
-                SideChatRequest(
-                    input = inputText,
-                    messages = previousMessages,
-                    writingContext = sideChatWritingContext(),
-                    screenContext = screenContext,
-                    forceSearch = forceSearch,
-                ),
-                onProgress = { progress ->
-                    if (token == chatRequestToken && chatBusy && !closed) {
-                        chatProgress = progress
-                        chatProgressLabel?.text = SideChatDisplayPolicy.progressLabel(
-                            progress,
-                            System.currentTimeMillis() - chatProgressStartedAt,
-                        )
-                    }
-                },
-            ) { result ->
-                // 화면 임시 파일은 응답이 늦게 도착하거나 무시되더라도 항상 삭제한다.
-                finishChatScreenRequest(screenContext)
-                if (stopping || panel !== this || closed || token != chatRequestToken) {
-                    return@chat
-                }
-                chatBusy = false
-                stopChatProgress()
-                result.fold(
-                    onSuccess = { response ->
-                        val visibleResponse = response.copy(
-                            reply = SideChatDisplayPolicy.clean(
-                                response.reply,
-                                response.sources.isNotEmpty() || response.untrustedExternalContext,
-                            ),
-                        )
-                        if (editedMessageAlreadyStored) {
-                            sideChatStore.appendAssistant(
-                                visibleResponse.reply,
-                                visibleResponse.sources,
-                                visibleResponse.followUpQueries,
-                                visibleResponse.untrustedExternalContext,
-                                visibleResponse.sourcesMissing,
-                            )
-                        } else {
-                            sideChatStore.appendExchange(
-                                inputText,
-                                visibleResponse.reply,
-                                visibleResponse.sources,
-                                visibleResponse.followUpQueries,
-                                visibleResponse.untrustedExternalContext,
-                                visibleResponse.sourcesMissing,
-                            )
-                        }
-                        chatPendingUser = ""
-                        chatDraft = ""
-                        retainedChatDraft = ""
-                        chatError = ""
-                        val action = visibleResponse.action
-                        // AI 계층의 판단에 더해 UI 실행 경계에서도 외부 자료 여부를 다시 확인한다.
-                        val needsConfirmation = visibleResponse.actionRequiresConfirmation ||
-                            SideChatSearchPolicy.requiresConfirmation(
-                                action,
-                                SideChatSearchPolicy.isExternallyGrounded(
-                                    screenContext,
-                                    visibleResponse.sources,
-                                    visibleResponse.usedWebSearch,
-                                    visibleResponse.untrustedExternalContext,
-                                ),
-                            )
-                        pendingChatAction = action.takeIf {
-                            needsConfirmation && it.name != SideChatAction.NONE
-                        }
-                        if (screenState == PanelScreenState.CHAT) {
-                            keepChatKeyboard = restoreKeyboard && pendingChatAction == null
-                            renderSideChat()
-                        }
-                        if (!needsConfirmation) executeSideChatAction(action)
-                    },
-                    onFailure = { failure ->
-                        chatPendingUser = ""
-                        if (!editedMessageAlreadyStored) {
-                            chatDraft = inputText
-                            retainedChatDraft = inputText
-                        }
-                        chatSearchMode = forceSearch
-                        chatError = failure.message?.take(180)
-                            ?: "채팅 답변을 가져오지 못했어요."
-                        if (screenState == PanelScreenState.CHAT) {
-                            keepChatKeyboard = restoreKeyboard
-                            renderSideChat()
-                        } else {
-                            Toast.makeText(
-                                this@OverlayService,
-                                chatError,
-                                Toast.LENGTH_SHORT,
-                            ).show()
-                        }
-                    },
-                )
-            }
-        }
-
-        private fun requestNewSideChat() {
-            if (chatBusy) return
-            if (sideChatStore.list().isEmpty()) {
-                clearSideChat()
-            } else {
-                chatClearConfirmation = true
-                renderSideChat()
-            }
-        }
-
-        private fun clearSideChat() {
-            if (chatBusy) return
-            val restoreKeyboard = focusedEditor() === chatInput || imeVisible
-            sideChatStore.clear()
-            discardPendingChatScreen()
-            pendingChatAction = null
-            chatSearchMode = false
-            chatScreenNotice = ""
-            chatDraft = ""
-            retainedChatDraft = ""
-            chatPendingUser = ""
-            chatEditingMessageId = ""
-            chatClearConfirmation = false
-            chatError = ""
-            keepChatKeyboard = restoreKeyboard
-            renderSideChat()
-        }
-
         private fun returnFromSideChat() {
-            chatInput?.let { chatDraft = it.text?.toString().orEmpty() }
-            chatEditingMessageId = ""
-            chatClearConfirmation = false
-            discardPendingChatScreen()
-            chatScreenNotice = ""
-            hideKeyboard()
+            sideChat.leave()
             when (chatReturnScreen) {
                 PanelScreenState.GUESS -> {
                     if (session.guessQuestion && session.question.isNotBlank()) {
@@ -2969,19 +1801,6 @@ class OverlayService : Service() {
                 "채팅의 내용을 새 결과 버전으로 반영했어요.",
                 Toast.LENGTH_SHORT,
             ).show()
-        }
-
-        private fun focusChatInput(showKeyboard: Boolean) {
-            val field = chatInput ?: return
-            field.post {
-                if (screenState != PanelScreenState.CHAT || closed) return@post
-                field.requestFocus()
-                field.setSelection(field.text?.length ?: 0)
-                if (showKeyboard) {
-                    (getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager)
-                        .showSoftInput(field, InputMethodManager.SHOW_IMPLICIT)
-                }
-            }
         }
 
         private fun focusEditor(editor: PasteFriendlyEditText?) {
@@ -3592,20 +2411,7 @@ class OverlayService : Service() {
             if (closed || settingsOpen) return
             syncInputs()
             val editorActive = focusedEditor() != null || imeVisible
-            if (!editorActive && screenState == PanelScreenState.CHAT) {
-                when {
-                    chatClearConfirmation -> {
-                        chatClearConfirmation = false
-                        renderSideChat()
-                        return
-                    }
-                    chatEditingMessageId.isNotBlank() -> {
-                        chatEditingMessageId = ""
-                        renderSideChat()
-                        return
-                    }
-                }
-            }
+            if (screenState == PanelScreenState.CHAT && sideChat.handleBack(editorActive)) return
             when (
                 MobileUiPolicy.backAction(
                     editorActive = editorActive,
@@ -3670,7 +2476,7 @@ class OverlayService : Service() {
                 PanelScreenState.RESULT -> {
                     if (session.draft.isNotBlank()) renderStoredResult() else renderInput()
                 }
-                PanelScreenState.CHAT -> renderSideChat()
+                PanelScreenState.CHAT -> sideChat.render()
                 else -> renderInput()
             }
         }
@@ -3900,8 +2706,7 @@ class OverlayService : Service() {
                     bridgeInProgress = false
                     restoreAfterBridge()
                     if (isSideChatVisualTarget(target)) {
-                        chatScreenNotice = "화면 공유 기능을 열지 못했어요."
-                        renderSideChat()
+                        sideChat.showNotice("화면 공유 기능을 열지 못했어요.")
                     } else {
                         showError("시스템 기능을 열지 못했어요.")
                     }
@@ -4181,7 +2986,7 @@ class OverlayService : Service() {
             situationInput?.let { session.situation = it.text.toString() }
             input?.let { session.rawInput = it.text.toString() }
             answerInput?.let { session.answer = it.text.toString() }
-            chatInput?.let { chatDraft = it.text.toString() }
+            sideChat.syncDraft()
         }
 
         private fun resetViewReferences() {
@@ -4196,7 +3001,7 @@ class OverlayService : Service() {
             input = null
             situationInput = null
             answerInput = null
-            chatInput = null
+            sideChat.forgetViews()
             completeButton = null
             answerPrimaryButton = null
             reenhanceButton = null
@@ -4226,32 +3031,6 @@ class OverlayService : Service() {
             )
             background = Ui.interactive(this@OverlayService, color, 12)
             stateListAnimator = null
-        }
-
-        private fun copySideChatAnswer(view: TextView, fullText: String) {
-            if (fullText.isBlank()) return
-            val start = android.text.Selection.getSelectionStart(view.text)
-            val end = android.text.Selection.getSelectionEnd(view.text)
-            val selectedText = if (
-                start >= 0 &&
-                end >= 0 &&
-                start != end
-            ) {
-                fullText.substring(minOf(start, end), maxOf(start, end))
-            } else {
-                fullText
-            }
-            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
-            clipboard.setPrimaryClip(ClipData.newPlainText("AI 답변", selectedText))
-            Toast.makeText(
-                this@OverlayService,
-                if (selectedText.length == fullText.length) {
-                    "AI 답변을 복사했어요."
-                } else {
-                    "선택한 부분을 복사했어요."
-                },
-                Toast.LENGTH_SHORT,
-            ).show()
         }
 
         private fun copyAndClose(text: String) {

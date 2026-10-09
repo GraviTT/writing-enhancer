@@ -76,7 +76,140 @@
     { "stage": "requesting", "searchRequired": false, "elapsedMs": 1500, "expected": "답변을 준비하는 중" },
     { "stage": "requesting", "searchRequired": true, "elapsedMs": 14200, "expected": "웹에서 찾아보는 중 · 14초" },
     { "stage": "fallback", "searchRequired": true, "elapsedMs": 41000, "expected": "다른 AI로 다시 시도하는 중 · 41초" },
-    { "stage": "fallback", "searchRequired": false, "elapsedMs": 2999, "expected": "다른 AI로 다시 시도하는 중" }
+    { "stage": "fallback", "searchRequired": false, "elapsedMs": 2999, "expected": "다른 AI로 다시 시도하는 중" },
+    { "stage": "searching", "searchRequired": false, "elapsedMs": 5200, "expected": "웹에서 찾아보는 중 · 5초" }
+  ],
+  "streamVisible": [
+    { "input": "회의 목표부터 확인하세요.", "expected": "회의 목표부터 확인하세요." },
+    { "input": "답변입니다.\n\n```app-control\n{\"role\":", "expected": "답변입니다." },
+    { "input": "답변입니다.\n\n``", "expected": "답변입니다.\n\n" },
+    { "input": "```app-con", "expected": "" },
+    { "input": "코드 `a` 예시", "expected": "코드 `a` 예시" }
+  ],
+  "controlBlock": [
+    {
+      "name": "분류·동작·후속 질문을 읽고 중복·빈 질문은 뺀다",
+      "full": "  답변 본문\n\n```app-control\n{\"role\":\"research\",\"action\":{\"name\":\"none\",\"value\":\"무시\"},\"related_queries\":[\"다음 질문\",\"다음 질문\",\" \",\"둘째\",\"셋째\",\"넷째\"]}\n```",
+      "answer": "답변 본문",
+      "answerOffset": 2,
+      "role": "research",
+      "action": { "name": "none", "value": "" },
+      "relatedQueries": ["다음 질문", "둘째", "셋째"]
+    },
+    {
+      "name": "제어 블록이 없으면 답변만 남긴다",
+      "full": "블록 없는 답변 ",
+      "answer": "블록 없는 답변",
+      "answerOffset": 0,
+      "role": "",
+      "action": { "name": "none", "value": "" },
+      "relatedQueries": []
+    },
+    {
+      "name": "깨진 제어 블록은 무시한다",
+      "full": "답\n```app-control\n{\"role\":\"command\"",
+      "answer": "답",
+      "answerOffset": 0,
+      "role": "",
+      "action": { "name": "none", "value": "" },
+      "relatedQueries": []
+    },
+    {
+      "name": "알 수 없는 동작은 실행하지 않는다",
+      "full": "바꿀게요.\n```app-control\n{\"role\":\"command\",\"action\":{\"name\":\"delete_all\",\"value\":\"x\"}}\n```",
+      "answer": "바꿀게요.",
+      "answerOffset": 0,
+      "role": "command",
+      "action": { "name": "none", "value": "" },
+      "relatedQueries": []
+    },
+    {
+      "name": "제어 블록 안의 군더더기 글은 건너뛴다",
+      "full": "적용할게요.\n```app-control\n설명 {\"role\":\"command\",\"action\":{\"name\":\"set_enhancement_level\",\"value\":\"4\"}} 끝\n```",
+      "answer": "적용할게요.",
+      "answerOffset": 0,
+      "role": "command",
+      "action": { "name": "set_enhancement_level", "value": "4" },
+      "relatedQueries": []
+    }
+  ],
+  "category": [
+    { "role": "writing", "action": "none", "hasSources": false, "expected": "writing", "label": "글 상담" },
+    { "role": "research", "action": "none", "hasSources": false, "expected": "research", "label": "질문 답변" },
+    { "role": "", "action": "none", "hasSources": true, "expected": "research", "label": "웹 조사" },
+    { "role": "writing", "action": "replace_source", "hasSources": true, "expected": "command", "label": "앱 조작" },
+    { "role": "command", "action": "none", "hasSources": false, "expected": "writing", "label": "글 상담" }
+  ],
+  "formatAnswer": [
+    {
+      "name": "괄호 속 링크 출처는 지우고 앞 문장에 연결한다",
+      "raw": "회의 목표부터 확인하세요. ([example.com](https://example.com/meeting)) 다음은 참석자예요.",
+      "annotations": [{ "match": "[example.com](https://example.com/meeting)", "source": 0 }],
+      "cleanLinks": true,
+      "text": "회의 목표부터 확인하세요. 다음은 참석자예요.",
+      "citations": [{ "text": "회의 목표부터 확인하세요.", "sources": [0] }],
+      "styles": []
+    },
+    {
+      "name": "일반 글 범위는 그대로 연결하고 굵게 표시를 정리한다",
+      "raw": "**하루 전**까지 신청해요. 당일은 승인이 필요해요.",
+      "annotations": [
+        { "match": "당일은 승인이 필요해요.", "source": 1 },
+        { "start": 0, "end": 999, "source": 0 }
+      ],
+      "cleanLinks": false,
+      "text": "하루 전까지 신청해요. 당일은 승인이 필요해요.",
+      "citations": [{ "text": "당일은 승인이 필요해요.", "sources": [1] }],
+      "styles": [{ "text": "하루 전", "kind": "bold" }]
+    },
+    {
+      "name": "목록 기호는 링크에서 빼고 남은 주소는 사이트 이름으로 줄인다",
+      "raw": "- 첫째 항목입니다. https://www.example.com/a\n- 둘째 항목은 `코드`예요. 자세한 내용은 https://WWW.Example.com/b/ 참고.\n- [안내](https://example.org/guide)",
+      "annotations": [{ "match": "https://www.example.com/a", "source": 0 }],
+      "cleanLinks": true,
+      "text": "- 첫째 항목입니다.\n- 둘째 항목은 코드예요. 자세한 내용은 [example.com] 참고.\n- 안내",
+      "citations": [{ "text": "첫째 항목입니다.", "sources": [0] }],
+      "styles": [{ "text": "코드", "kind": "code" }]
+    },
+    {
+      "name": "한 문장 뒤의 출처 둘은 한 링크로 합치고 제목 표시를 정리한다",
+      "raw": "외부 손님은 하루 전에 신청해요. [a.com](https://a.com) [b.org](https://b.org)\n\n## 정리\n끝입니다.",
+      "annotations": [
+        { "match": "[a.com](https://a.com)", "source": 0 },
+        { "match": "[b.org](https://b.org)", "source": 1 }
+      ],
+      "cleanLinks": true,
+      "text": "외부 손님은 하루 전에 신청해요.\n\n정리\n끝입니다.",
+      "citations": [{ "text": "외부 손님은 하루 전에 신청해요.", "sources": [0, 1] }],
+      "styles": [{ "text": "정리", "kind": "bold" }]
+    },
+    {
+      "name": "근거 범위가 서식 표시를 걸쳐도 위치가 맞는다",
+      "raw": "앞 문장. **굵은** 근거 문장입니다.",
+      "annotations": [{ "match": "**굵은** 근거 문장입니다.", "source": 0 }],
+      "cleanLinks": false,
+      "text": "앞 문장. 굵은 근거 문장입니다.",
+      "citations": [{ "text": "굵은 근거 문장입니다.", "sources": [0] }],
+      "styles": [{ "text": "굵은", "kind": "bold" }]
+    },
+    {
+      "name": "코드 블록 울타리는 지우고 내용은 코드 서식으로 남긴다",
+      "raw": "예시:\n```js\nconst a = 1;\n```\n끝",
+      "annotations": [],
+      "cleanLinks": false,
+      "text": "예시:\nconst a = 1;\n\n끝",
+      "citations": [],
+      "styles": [{ "text": "const a = 1;\n", "kind": "code" }]
+    },
+    {
+      "name": "표시를 지운 뒤 앞뒤에 남은 공백은 위치와 함께 덜어 낸다",
+      "raw": "[a.com](https://a.com) 앞에 붙은 출처예요.\n```\n코드\n```",
+      "annotations": [{ "match": "[a.com](https://a.com)", "source": 0 }],
+      "cleanLinks": true,
+      "text": "앞에 붙은 출처예요.\n코드",
+      "citations": [],
+      "styles": [{ "text": "코드", "kind": "code" }]
+    }
   ],
   "pendingAction": [
     { "action": "set_situation", "value": " 회의 안내 ", "label": "상황 안내를 이 내용으로 바꾸기", "preview": "회의 안내" },
@@ -157,6 +290,35 @@
         "followUp": "",
         "reply": "",
         "enhancementLevel": 5,
+        "versionIndex": 0,
+        "versionCount": 0,
+        "attachmentNames": []
+      }
+    },
+    {
+      "name": "이전 검색 답변은 검색어와 출처 기록을 함께 남긴다",
+      "input": "외부 손님도 같은 규정이야?",
+      "messages": [
+        { "role": "user", "content": "회의실 예약 규정 찾아줘" },
+        {
+          "role": "assistant",
+          "content": "회의실은 2시간 단위로 예약해요.",
+          "external": true,
+          "searchQueries": ["회의실 예약 규정", " 외부 손님 신청 "],
+          "sources": [
+            { "title": "회의실 이용 안내", "url": "https://www.example.com/rooms" },
+            { "title": "example.org", "url": "https://example.org/x" }
+          ]
+        }
+      ],
+      "writingContext": {
+        "view": "input",
+        "situation": "",
+        "input": "",
+        "completedText": "",
+        "followUp": "",
+        "reply": "",
+        "enhancementLevel": 3,
         "versionIndex": 0,
         "versionCount": 0,
         "attachmentNames": []

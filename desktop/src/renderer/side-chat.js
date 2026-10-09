@@ -7,6 +7,9 @@
   const cropPolicy = window.visualCrop;
   // 진행 표시·적용 카드 문구는 shared/rules에서 Android와 함께 쓴다.
   const chatText = window.sideChatText;
+  // 답변 정리(문장 출처·서식·분류)는 Android와 같은 규칙을 쓴다.
+  const chatAnswer = window.chatAnswer;
+  const dialogText = chatText.labels.sourceDialog;
   const elements = Object.fromEntries(
     [
       "openWritingButton",
@@ -37,7 +40,12 @@
       "cropCancelButton",
       "cropFullButton",
       "cropApplyButton",
-      "chatSurface"
+      "chatSurface",
+      "sourceDialog",
+      "sourceDialogTitle",
+      "sourceDialogBody",
+      "sourceDialogCancel",
+      "sourceDialogConfirm"
     ].map((id) => [id, document.querySelector(`#${id}`)])
   );
 
@@ -51,6 +59,11 @@
     progress: null,
     progressTimer: undefined,
     pendingAction: null,
+    // 답변을 받는 동안 흘려 받은 글과, 그동안 보여 줄 사용자 메시지
+    streamText: "",
+    pendingUserText: "",
+    // 출처 확인 대화상자: { options: [{ index, source }], selected, sentence }
+    sourceDialog: null,
     capturingScreen: false,
     screenCaptureAttempt: 0,
     screenAttachment: null,
@@ -338,6 +351,7 @@
     elements.newChatButton.disabled = true;
     beginReply();
     state.messages = state.messages.slice(0, index);
+    state.pendingUserText = input;
     renderMessages({ pendingUser: input, typing: true });
     let response;
     try {
@@ -363,6 +377,7 @@
   function beginReply() {
     state.busy = true;
     state.replying = true;
+    state.streamText = "";
     window.clearInterval(state.progressTimer);
     state.progress = { startedAt: Date.now(), stage: "requesting", searchPolicy: "" };
     state.progressTimer = window.setInterval(updateProgressLabel, 1_000);
@@ -372,6 +387,8 @@
   function endReply() {
     state.busy = false;
     state.replying = false;
+    state.streamText = "";
+    state.pendingUserText = "";
     window.clearInterval(state.progressTimer);
     state.progressTimer = undefined;
     state.progress = null;
@@ -534,7 +551,7 @@
     list.className = "message-sources";
     const label = document.createElement("span");
     label.className = "message-sources-label";
-    label.textContent = "웹에서 확인";
+    label.textContent = chatText.labels.sourcesHeading;
     list.append(label);
     sources.forEach((source, index) => {
       const button = document.createElement("button");
@@ -542,11 +559,10 @@
       button.className = "message-source-link";
       button.textContent = `${index + 1}. ${source.title || "출처"}`;
       button.title = source.url || "";
-      button.setAttribute("aria-label", `출처 ${index + 1} 열기: ${source.title || "웹 문서"}`);
-      button.addEventListener("click", async () => {
-        const response = await api.openExternalLink(source.url || "");
-        if (!response?.ok) showToast("출처 링크를 열지 못했어요.");
-      });
+      button.setAttribute("aria-label", `출처 ${index + 1} 확인: ${source.title || "웹 문서"}`);
+      button.addEventListener("click", () =>
+        openSourceDialog({ sources: message.sources, indices: [index], sentence: "" })
+      );
       list.append(button);
     });
     return list;
@@ -580,6 +596,202 @@
     return group;
   }
 
+  // 답변 글을 굵게·코드 서식과 문장 출처 링크로 그린다. 위치는 chat-answer.js가 계산한 값이다.
+  function renderRichText(container, text, styles = [], citations = [], onCitation = null) {
+    container.replaceChildren();
+    const points = new Set([0, text.length]);
+    for (const range of [...styles, ...citations]) {
+      points.add(range.start);
+      points.add(range.end);
+    }
+    const boundaries = [...points]
+      .filter((point) => point >= 0 && point <= text.length)
+      .sort((left, right) => left - right);
+    let openCitation = -1;
+    let citationNode = null;
+    for (let index = 0; index < boundaries.length - 1; index += 1) {
+      const start = boundaries[index];
+      const end = boundaries[index + 1];
+      if (start === end) continue;
+      let node = document.createTextNode(text.slice(start, end));
+      for (const style of styles) {
+        if (style.start <= start && end <= style.end) {
+          const wrapper = document.createElement(style.kind === "code" ? "code" : "strong");
+          wrapper.append(node);
+          node = wrapper;
+        }
+      }
+      const citationIndex = citations.findIndex(
+        (citation) => citation.start <= start && end <= citation.end
+      );
+      if (citationIndex < 0) {
+        openCitation = -1;
+        container.append(node);
+        continue;
+      }
+      if (citationIndex !== openCitation) {
+        const citation = citations[citationIndex];
+        citationNode = document.createElement("span");
+        citationNode.className = "message-cite";
+        citationNode.tabIndex = 0;
+        citationNode.setAttribute("role", "button");
+        citationNode.setAttribute("aria-label", `${dialogText.title}: ${text.slice(citation.start, citation.end)}`);
+        citationNode.addEventListener("click", () => onCitation?.(citationIndex));
+        citationNode.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onCitation?.(citationIndex);
+          }
+        });
+        container.append(citationNode);
+        openCitation = citationIndex;
+      }
+      citationNode.append(node);
+      if (end === citations[citationIndex].end) {
+        const mark = document.createElement("sup");
+        mark.className = "cite-mark";
+        mark.textContent = citations[citationIndex].sources.map((source) => source + 1).join(",");
+        container.append(mark);
+        openCitation = -1;
+      }
+    }
+  }
+
+  function createCategoryBadge(message) {
+    if (!message?.category) return null;
+    const badge = document.createElement("span");
+    badge.className = `message-category category-${message.category}`;
+    badge.textContent = chatAnswer.roleLabel(
+      message.category,
+      Array.isArray(message.sources) && message.sources.length > 0
+    );
+    return badge;
+  }
+
+  const sourceHost = (url) => chatAnswer.hostOf(url);
+
+  // 출처 링크를 누르면 바로 열지 않고, 자료 설명과 확인·취소를 먼저 보여 준다.
+  function openSourceDialog({ sources, indices, sentence = "" }) {
+    const options = (Array.isArray(indices) ? indices : [])
+      .map((index) => ({ index, source: Array.isArray(sources) ? sources[index] : null }))
+      .filter((option) => option.source?.url);
+    if (options.length === 0) return;
+    state.sourceDialog = { options, selected: 0, sentence: String(sentence || "") };
+    renderSourceDialog();
+    elements.sourceDialog.classList.remove("is-hidden");
+    window.requestAnimationFrame(() => elements.sourceDialogConfirm.focus());
+  }
+
+  function renderSourceDialog() {
+    const dialog = state.sourceDialog;
+    if (!dialog) return;
+    const body = elements.sourceDialogBody;
+    body.replaceChildren();
+    const intro = document.createElement("p");
+    intro.textContent = dialog.sentence ? dialogText.sentenceIntro : dialogText.listIntro;
+    body.append(intro);
+    if (dialog.sentence) {
+      const quote = document.createElement("blockquote");
+      quote.textContent = dialog.sentence.length > 180 ? `${dialog.sentence.slice(0, 180)}…` : dialog.sentence;
+      body.append(quote);
+    }
+    if (dialog.options.length > 1) {
+      const list = document.createElement("div");
+      list.className = "source-options";
+      dialog.options.forEach((option, position) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "source-option";
+        button.setAttribute("aria-pressed", position === dialog.selected ? "true" : "false");
+        button.textContent = `${option.index + 1}. ${option.source.title || sourceHost(option.source.url)}`;
+        button.addEventListener("click", () => {
+          dialog.selected = position;
+          renderSourceDialog();
+        });
+        list.append(button);
+      });
+      body.append(list);
+    }
+    const source = dialog.options[dialog.selected].source;
+    const host = sourceHost(source.url);
+    const details = document.createElement("dl");
+    const addDetail = (term, value) => {
+      if (!value) return;
+      const dt = document.createElement("dt");
+      dt.textContent = term;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      details.append(dt, dd);
+    };
+    addDetail(dialogText.site, source.title && source.title !== host ? `${source.title} · ${host}` : host);
+    addDetail(dialogText.address, source.url);
+    addDetail(dialogText.query, source.query);
+    body.append(details);
+    if (host === "vertexaisearch.cloud.google.com") {
+      const redirect = document.createElement("p");
+      redirect.className = "source-dialog-note";
+      redirect.textContent = dialogText.redirectNote;
+      body.append(redirect);
+    }
+    const note = document.createElement("p");
+    note.className = "source-dialog-note";
+    note.textContent = dialogText.openNote;
+    body.append(note);
+  }
+
+  function closeSourceDialog({ focusInput = true } = {}) {
+    state.sourceDialog = null;
+    elements.sourceDialog.classList.add("is-hidden");
+    if (focusInput) focusChatInput();
+  }
+
+  async function confirmSourceDialog() {
+    const dialog = state.sourceDialog;
+    if (!dialog) return;
+    const source = dialog.options[dialog.selected].source;
+    closeSourceDialog({ focusInput: false });
+    let response;
+    try {
+      response = await api.openExternalLink(source.url || "");
+    } catch {
+      response = null;
+    }
+    if (!response?.ok) showToast("출처 링크를 열지 못했어요.");
+  }
+
+  function renderAssistantText(container, message) {
+    const hasRanges =
+      (Array.isArray(message.citations) && message.citations.length > 0) ||
+      (Array.isArray(message.styles) && message.styles.length > 0);
+    if (!hasRanges) {
+      container.textContent = visibleAssistantContent(message);
+      return;
+    }
+    const content = String(message.content || "");
+    renderRichText(container, content, message.styles || [], message.citations || [], (index) => {
+      const citation = message.citations[index];
+      openSourceDialog({
+        sources: message.sources,
+        indices: citation.sources,
+        sentence: content.slice(citation.start, citation.end)
+      });
+    });
+  }
+
+  // 흘려 받는 글을 그 자리에서 바꾼다. 처음 받으면 대기 표시를 답변 말풍선으로 바꾼다.
+  function updateStreamingBubble() {
+    const target = elements.messageList.querySelector(".message.streaming .message-text");
+    if (!target || !state.streamText) {
+      renderMessages({ pendingUser: state.pendingUserText, typing: true });
+      return;
+    }
+    const nearBottom =
+      elements.messageList.scrollHeight - elements.messageList.scrollTop - elements.messageList.clientHeight < 80;
+    const formatted = chatAnswer.formatAnswer(state.streamText);
+    renderRichText(target, formatted.text, formatted.styles);
+    if (nearBottom) scrollToLatest();
+  }
+
   function renderMessages({ pendingUser = "", typing = false } = {}) {
     elements.messageList.replaceChildren();
     const visible = [...state.messages];
@@ -602,8 +814,13 @@
       bubble.className = `message ${message.role}${message.pending ? " pending" : ""}`;
       const messageText = document.createElement("div");
       messageText.className = "message-text";
-      messageText.textContent =
-        message.role === "assistant" ? visibleAssistantContent(message) : message.content;
+      if (message.role === "assistant") {
+        const badge = createCategoryBadge(message);
+        if (badge) bubble.append(badge);
+        renderAssistantText(messageText, message);
+      } else {
+        messageText.textContent = message.content;
+      }
       bubble.append(messageText);
       if (message.role === "assistant" && message.sourcesMissing === true) {
         const note = document.createElement("p");
@@ -645,7 +862,20 @@
       row.append(createPendingActionCard(state.pendingAction));
       elements.messageList.append(row);
     }
-    if (typing) {
+    if (typing && state.streamText) {
+      const row = document.createElement("div");
+      row.className = "message-row assistant";
+      const bubble = document.createElement("div");
+      bubble.className = "message assistant streaming";
+      bubble.setAttribute("aria-live", "polite");
+      const messageText = document.createElement("div");
+      messageText.className = "message-text";
+      const formatted = chatAnswer.formatAnswer(state.streamText);
+      renderRichText(messageText, formatted.text, formatted.styles);
+      bubble.append(messageText);
+      row.append(bubble);
+      elements.messageList.append(row);
+    } else if (typing) {
       const indicator = document.createElement("div");
       indicator.className = "typing";
       indicator.setAttribute("role", "status");
@@ -704,6 +934,7 @@
     state.searchMode = false;
     state.pendingAction = null;
     beginReply();
+    state.pendingUserText = input;
     elements.chatInput.value = "";
     autoGrow();
     renderMessages({ pendingUser: input, typing: true });
@@ -822,6 +1053,11 @@
   });
   elements.newChatButton.addEventListener("click", requestClearChat);
   elements.clearCancelButton.addEventListener("click", () => closeClearConfirmation());
+  elements.sourceDialogTitle.textContent = dialogText.title;
+  elements.sourceDialogCancel.textContent = dialogText.cancel;
+  elements.sourceDialogConfirm.textContent = dialogText.confirm;
+  elements.sourceDialogCancel.addEventListener("click", () => closeSourceDialog());
+  elements.sourceDialogConfirm.addEventListener("click", confirmSourceDialog);
   elements.clearConfirmButton.addEventListener("click", performClearChat);
   elements.chatToastAction.addEventListener("click", () => api.openMainSettings());
   elements.cropCancelButton.addEventListener("click", closeCropDialog);
@@ -864,8 +1100,17 @@
   });
   api.onSideChatDiscardScreenContext(() => clearScreenContext({ silent: true }));
   api.onSideChatWritingContext(renderWritingContext);
+  api.onSideChatDelta((payload) => {
+    if (!state.replying) return;
+    state.streamText = String(payload?.text || "");
+    updateStreamingBubble();
+  });
   api.onSideChatProgress((progress) => {
     if (!state.progress) return;
+    if (progress?.stage === "fallback" && state.streamText) {
+      state.streamText = "";
+      updateStreamingBubble();
+    }
     state.progress.stage = progress?.stage || state.progress.stage;
     state.progress.searchPolicy = progress?.searchPolicy || state.progress.searchPolicy;
     updateProgressLabel();
@@ -873,6 +1118,10 @@
   // 채팅 화면의 대화 상자를 Escape로 닫았으면 true. 글 강화기 화면의 Escape 처리보다 먼저 부른다.
   function handleEscape() {
     if (!isSurfaceVisible()) return false;
+    if (state.sourceDialog) {
+      closeSourceDialog();
+      return true;
+    }
     if (!elements.cropDialog.classList.contains("is-hidden")) {
       closeCropDialog();
       return true;
@@ -912,9 +1161,21 @@
           role: "assistant",
           content:
             "먼저 회의의 결정 목표, 참석자, 반드시 확인할 자료 세 가지만 점검하세요. 그다음 안건별로 필요한 결정과 담당자를 한 줄씩 적으면 준비가 빠릅니다.",
+          category: "research",
+          externalGrounding: true,
+          styles: [{ start: 7, end: 12, kind: "bold" }],
+          citations: [
+            { start: 0, end: 42, sources: [0] },
+            { start: 43, end: 83, sources: [0, 1] }
+          ],
           sources: [
-            { title: "공식 회의 준비 안내", url: "https://example.com/meeting-guide" },
-            { title: "업무 회의 체크리스트", url: "https://example.org/checklist" }
+            {
+              title: "공식 회의 준비 안내",
+              url: "https://example.com/meeting-guide",
+              cited: true,
+              query: "회의 준비 체크리스트"
+            },
+            { title: "업무 회의 체크리스트", url: "https://example.org/checklist", cited: true }
           ],
           relatedQueries: [
             "회의 목적별 준비 순서를 비교해 줘",
@@ -938,6 +1199,39 @@
       this.showDemo();
       state.editingMessageId = "qa-user-1";
       renderMessages();
+    },
+    showSourceDialogDemo() {
+      this.showDemo();
+      state.editingMessageId = "";
+      renderMessages();
+      const message = state.messages.find((item) => item.id === "qa-assistant-1");
+      const citation = message.citations[1];
+      openSourceDialog({
+        sources: message.sources,
+        indices: citation.sources,
+        sentence: message.content.slice(citation.start, citation.end)
+      });
+    },
+    showStreamingDemo() {
+      closeSourceDialog({ focusInput: false });
+      state.pendingAction = null;
+      state.messages = [
+        { id: "qa-stream-user-1", role: "user", content: "회의실 예약 규정 알려 줘" },
+        {
+          id: "qa-stream-assistant-1",
+          role: "assistant",
+          content: "사내 공지 기준으로 정리해 드릴게요.",
+          category: "writing"
+        }
+      ];
+      state.busy = true;
+      state.replying = true;
+      state.progress = { startedAt: Date.now() - 6_000, stage: "searching", searchPolicy: "auto" };
+      state.pendingUserText = "외부 손님이 오면 언제까지 신청해야 해?";
+      state.streamText =
+        "외부 손님이 함께 오면 **하루 전**까지 신청해야 해요. 당일 신청은 담당 부서 승인이 필요하고,";
+      renderMessages({ pendingUser: state.pendingUserText, typing: true });
+      updateScreenContextUi();
     },
     showSearchDemo() {
       state.editingMessageId = "";

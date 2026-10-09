@@ -23,7 +23,7 @@
     const label =
       progress?.stage === "fallback"
         ? labels.progressFallback
-        : progress?.searchRequired === true
+        : progress?.stage === "searching" || progress?.searchRequired === true
           ? labels.progressSearching
           : labels.progressRequesting;
     const seconds = Math.floor(Math.max(0, Number(elapsedMs) || 0) / 1_000);

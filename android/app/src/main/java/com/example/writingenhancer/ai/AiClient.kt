@@ -23,7 +23,11 @@ class SideChatCancelledException : IOException(SharedSideChatRules.CANCELLED)
 // 중단할 때 연결 자체를 끊는다.
 class SideChatCall internal constructor(
     private val progressListener: (SideChatProgress) -> Unit,
+    private val deltaListener: (String) -> Unit = {},
 ) {
+    @Volatile
+    private var lastDeltaAt = 0L
+
     @Volatile
     var isCancelled = false
         private set
@@ -59,6 +63,25 @@ class SideChatCall internal constructor(
     internal fun report(progress: SideChatProgress) {
         if (!isCancelled) progressListener(progress)
     }
+
+    /** 지금까지 받은 답변 글을 화면에 흘려 보낸다. 너무 잦은 화면 갱신은 건너뛴다. */
+    internal fun reportDelta(accumulated: String) {
+        if (isCancelled) return
+        val now = System.nanoTime() / 1_000_000
+        if (now - lastDeltaAt < DELTA_INTERVAL_MS) return
+        lastDeltaAt = now
+        deltaListener(ChatAnswer.visibleStreamText(accumulated))
+    }
+
+    /** 다른 AI로 다시 물을 때 앞서 흘려 보낸 글을 지운다. */
+    internal fun resetDelta() {
+        lastDeltaAt = 0L
+        if (!isCancelled) deltaListener("")
+    }
+
+    private companion object {
+        const val DELTA_INTERVAL_MS = 40L
+    }
 }
 
 class AiClient(private val secureStore: SecureStore) {
@@ -80,9 +103,13 @@ class AiClient(private val secureStore: SecureStore) {
     fun chat(
         request: SideChatRequest,
         onProgress: (SideChatProgress) -> Unit = {},
+        onDelta: (String) -> Unit = {},
         callback: (Result<SideChatResult>) -> Unit,
     ): SideChatCall {
-        val call = SideChatCall { progress -> mainHandler.post { onProgress(progress) } }
+        val call = SideChatCall(
+            progressListener = { progress -> mainHandler.post { onProgress(progress) } },
+            deltaListener = { text -> mainHandler.post { onDelta(text) } },
+        )
         call.future = chatExecutor.submit {
             val result = runCatching { runChatRequest(request, call) }.recoverCatching { failure ->
                 throw if (call.isCancelled) SideChatCancelledException() else failure
@@ -142,57 +169,40 @@ class AiClient(private val secureStore: SecureStore) {
         )
         val fallbackAllowed =
             SideChatSearchPolicy.allowProviderFallback(effectiveRequest.screenContext)
-
-        var primaryFailure: Throwable? = null
-        // 검색을 직접 요청했는데 출처가 없던 첫 답변. 다른 공급자도 실패하면 경고와 함께 보여 준다.
-        var sourcelessAnswer: SideChatResult? = null
-        if (!openAiKey.isNullOrBlank()) {
-            call.ensureActive()
-            call.report(
-                SideChatProgress(SideChatProgress.Stage.REQUESTING, "GPT", searchRequired),
-            )
-            try {
-                val result = callOpenAiChat(openAiKey, effectiveRequest, call)
-                if (!missingRequiredSources(effectiveRequest, result)) return result
-                val flagged = result.copy(sourcesMissing = true)
-                // 화면 이미지는 다른 공급자에게 다시 보내지 않는다.
-                if (!fallbackAllowed) return flagged
-                sourcelessAnswer = flagged
-                primaryFailure = IOException("GPT 답변에 웹 검색 출처가 없습니다.")
-            } catch (failure: Throwable) {
-                if (call.isCancelled) throw SideChatCancelledException()
-                primaryFailure = failure
-                if (!fallbackAllowed) throw failure
-            }
+        val attempts = buildList<Pair<String, () -> SideChatResult>> {
+            if (!openAiKey.isNullOrBlank()) add("GPT" to { callOpenAiChat(openAiKey, effectiveRequest, call) })
+            if (!geminiKey.isNullOrBlank()) add("Gemini" to { callGeminiChat(geminiKey, effectiveRequest, call) })
         }
 
-        if (!geminiKey.isNullOrBlank()) {
+        var failure: Throwable? = null
+        for ((provider, run) in attempts) {
             call.ensureActive()
+            if (failure != null) call.resetDelta()
             call.report(
                 SideChatProgress(
-                    if (primaryFailure != null) {
-                        SideChatProgress.Stage.FALLBACK
-                    } else {
-                        SideChatProgress.Stage.REQUESTING
-                    },
-                    "Gemini",
+                    if (failure != null) SideChatProgress.Stage.FALLBACK else SideChatProgress.Stage.REQUESTING,
+                    provider,
                     searchRequired,
                 ),
             )
             try {
-                val result = callGeminiChat(geminiKey, effectiveRequest, call)
-                if (!missingRequiredSources(effectiveRequest, result)) return result
-                return sourcelessAnswer ?: result.copy(sourcesMissing = true)
-            } catch (failure: Throwable) {
+                val result = run()
+                // 이미 화면에 흘려 보낸 답변이므로 출처가 없어도 다른 AI로 다시 묻지 않고 표시만 남긴다.
+                val flagged = if (missingRequiredSources(effectiveRequest, result)) {
+                    result.copy(sourcesMissing = true)
+                } else {
+                    result
+                }
+                return flagged.copy(fallbackUsed = failure != null)
+            } catch (error: Throwable) {
                 if (call.isCancelled) throw SideChatCancelledException()
-                sourcelessAnswer?.let { return it }
-                primaryFailure?.let { failure.addSuppressed(it) }
-                throw failure
+                failure?.let { error.addSuppressed(it) }
+                failure = error
+                // 화면 이미지는 다른 공급자에게 다시 보내지 않는다.
+                if (!fallbackAllowed) throw error
             }
         }
-
-        sourcelessAnswer?.let { return it }
-        throw primaryFailure ?: MissingApiKeyException()
+        throw failure ?: MissingApiKeyException()
     }
 
     private fun missingRequiredSources(
@@ -304,6 +314,7 @@ class AiClient(private val secureStore: SecureStore) {
         return parseResult(text, "Gemini", requireCompleted = !request.questionFirst)
     }
 
+    // 사이드 채팅: 일반 글 답변을 스트리밍으로 받고, 끝난 뒤 인용 위치와 검색 기록을 정리한다.
     private fun callOpenAiChat(
         apiKey: String,
         request: SideChatRequest,
@@ -313,32 +324,18 @@ class AiClient(private val secureStore: SecureStore) {
         val body = JSONObject()
             .put("store", false)
             .put("model", OPENAI_MODEL)
+            .put("stream", true)
             .put("instructions", SharedSideChatRules.SYSTEM_PROMPT)
             .put(
                 "input",
                 JSONArray().put(
                     JSONObject()
                         .put("role", "user")
-                        .put(
-                            "content",
-                            openAiChatContent(request),
-                        ),
+                        .put("content", openAiChatContent(request)),
                 ),
             )
             .put("reasoning", JSONObject().put("effort", "medium"))
-            .put(
-                "text",
-                JSONObject()
-                    .put("verbosity", "medium")
-                    .put(
-                        "format",
-                        JSONObject()
-                            .put("type", "json_schema")
-                            .put("name", "side_chat_reply")
-                            .put("strict", true)
-                            .put("schema", JSONObject(SharedSideChatRules.RESPONSE_SCHEMA_JSON)),
-                    ),
-            )
+            .put("text", JSONObject().put("verbosity", "medium"))
         if (searchMode != SideChatSearchPolicy.Mode.DISABLED) {
             body.put(
                 "tools",
@@ -359,22 +356,20 @@ class AiClient(private val secureStore: SecureStore) {
                 )
                 .put("include", JSONArray().put("web_search_call.action.sources"))
         }
-        val response = postJson(
+        val stream = OpenAiChatStream(
+            onDelta = call::reportDelta,
+            onSearching = { call.report(SideChatProgress(SideChatProgress.Stage.SEARCHING, "GPT", false)) },
+        )
+        postEventStream(
             url = "https://api.openai.com/v1/responses",
             body = body,
             headers = mapOf("Authorization" to "Bearer $apiKey"),
             provider = "GPT",
             maxRequestBytes = RequestSizePolicy.OPENAI_MAX_BYTES,
             call = call,
+            onEvent = stream::accept,
         )
-        val root = JSONObject(response)
-        val parsed = parseSideChatResult(extractOpenAiText(response), "GPT")
-        return finishChatResult(
-            parsed = parsed,
-            request = request,
-            sources = extractOpenAiSources(root),
-            usedWebSearch = openAiUsedWebSearch(root),
-        )
+        return SideChatComposer.compose(stream.finish(), request, "GPT")
     }
 
     private fun callGeminiChat(
@@ -383,6 +378,7 @@ class AiClient(private val secureStore: SecureStore) {
         call: SideChatCall,
     ): SideChatResult {
         val searchMode = SideChatSearchPolicy.mode(request.input, request.forceSearch)
+        val searchEnabled = searchMode != SideChatSearchPolicy.Mode.DISABLED
         val body = JSONObject()
             .put(
                 "system_instruction",
@@ -396,174 +392,31 @@ class AiClient(private val secureStore: SecureStore) {
                 JSONArray().put(
                     JSONObject()
                         .put("role", "user")
-                        .put(
-                            "parts",
-                            geminiChatContent(request),
-                        ),
+                        .put("parts", geminiChatContent(request)),
                 ),
             )
-            .put(
-                "generationConfig",
-                JSONObject()
-                    .put("responseMimeType", "application/json")
-                    .put(
-                        "responseJsonSchema",
-                        JSONObject(SharedSideChatRules.GEMINI_RESPONSE_SCHEMA_JSON),
-                    ),
-            )
-        if (searchMode != SideChatSearchPolicy.Mode.DISABLED) {
+        if (searchEnabled) {
             body.put(
                 "tools",
                 JSONArray().put(JSONObject().put("googleSearch", JSONObject())),
             )
         }
-        validateGeminiRequestBody(
-            body,
-            searchEnabled = searchMode != SideChatSearchPolicy.Mode.DISABLED,
+        validateGeminiRequestBody(body, searchEnabled = searchEnabled, structuredOutput = false)
+        val stream = GeminiChatStream(
+            onDelta = call::reportDelta,
+            onSearching = { call.report(SideChatProgress(SideChatProgress.Stage.SEARCHING, "Gemini", false)) },
         )
-        val response = postJson(
+        postEventStream(
             url = "https://generativelanguage.googleapis.com/v1beta/models/" +
-                "$GEMINI_MODEL:generateContent",
+                "$GEMINI_MODEL:streamGenerateContent?alt=sse",
             body = body,
             headers = mapOf("x-goog-api-key" to apiKey),
             provider = "Gemini",
             maxRequestBytes = RequestSizePolicy.GEMINI_MAX_BYTES,
             call = call,
+            onEvent = stream::accept,
         )
-        val root = JSONObject(response)
-        val text = root
-            .getJSONArray("candidates")
-            .getJSONObject(0)
-            .getJSONObject("content")
-            .getJSONArray("parts")
-            .getJSONObject(0)
-            .getString("text")
-        val parsed = parseSideChatResult(text, "Gemini")
-        return finishChatResult(
-            parsed = parsed,
-            request = request,
-            sources = extractGeminiSources(root),
-            usedWebSearch = geminiUsedWebSearch(root),
-        )
-    }
-
-    // 검색·화면 자료가 섞인 답변의 동작은 지우지 않고 사용자 확인 대상으로 표시한다.
-    private fun finishChatResult(
-        parsed: SideChatResult,
-        request: SideChatRequest,
-        sources: List<WebSource>,
-        usedWebSearch: Boolean,
-    ): SideChatResult {
-        val untrustedExternalContext = SideChatSearchPolicy.isExternallyGrounded(
-            screenContext = request.screenContext,
-            sources = sources,
-            searchUsed = usedWebSearch,
-            untrustedConversation = request.priorExternalContext,
-        )
-        return parsed.copy(
-            sources = sources,
-            followUpQueries = SideChatSearchPolicy.visibleFollowUps(
-                actionName = parsed.action.name,
-                sources = sources,
-                queries = parsed.followUpQueries,
-            ),
-            usedWebSearch = usedWebSearch,
-            untrustedExternalContext = untrustedExternalContext,
-            actionRequiresConfirmation = SideChatSearchPolicy.requiresConfirmation(
-                parsed.action,
-                untrustedExternalContext,
-            ),
-        )
-    }
-
-    private fun extractOpenAiSources(root: JSONObject): List<WebSource> {
-        val citations = mutableListOf<WebSource>()
-        val rawSearchSources = mutableListOf<WebSource>()
-        val output = root.optJSONArray("output") ?: JSONArray()
-        // Final-answer citations are the sources the model actually chose to support its
-        // response, so collect them before the broader raw search-result pool.
-        for (index in 0 until output.length()) {
-            val item = output.optJSONObject(index) ?: continue
-            val content = item.optJSONArray("content") ?: JSONArray()
-            for (contentIndex in 0 until content.length()) {
-                val annotations = content.optJSONObject(contentIndex)
-                    ?.optJSONArray("annotations") ?: JSONArray()
-                for (annotationIndex in 0 until annotations.length()) {
-                    val annotation = annotations.optJSONObject(annotationIndex) ?: continue
-                    if (annotation.optString("type") != "url_citation") continue
-                    val citation = annotation.optJSONObject("url_citation") ?: annotation
-                    WebSourcePolicy.normalize(
-                        citation.optString("title"),
-                        citation.optString("url"),
-                    )?.let(citations::add)
-                }
-            }
-        }
-        for (index in 0 until output.length()) {
-            val item = output.optJSONObject(index) ?: continue
-            if (item.optString("type") == "web_search_call") {
-                val sources = item.optJSONObject("action")?.optJSONArray("sources") ?: JSONArray()
-                for (sourceIndex in 0 until sources.length()) {
-                    val source = sources.optJSONObject(sourceIndex) ?: continue
-                    WebSourcePolicy.normalize(
-                        source.optString("title"),
-                        source.optString("url"),
-                    )?.let(rawSearchSources::add)
-                }
-            }
-        }
-        return WebSourcePolicy.normalize(citations + rawSearchSources)
-    }
-
-    private fun openAiUsedWebSearch(root: JSONObject): Boolean {
-        val output = root.optJSONArray("output") ?: return false
-        for (index in 0 until output.length()) {
-            if (output.optJSONObject(index)?.optString("type") == "web_search_call") return true
-        }
-        return false
-    }
-
-    private fun extractGeminiSources(root: JSONObject): List<WebSource> {
-        val chunks = root.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("groundingMetadata")
-            ?.optJSONArray("groundingChunks") ?: JSONArray()
-        val found = mutableListOf<WebSource>()
-        for (index in 0 until chunks.length()) {
-            val web = chunks.optJSONObject(index)?.optJSONObject("web") ?: continue
-            WebSourcePolicy.normalize(
-                web.optString("title"),
-                web.optString("uri"),
-            )?.let(found::add)
-        }
-        return WebSourcePolicy.normalize(found)
-    }
-
-    private fun geminiUsedWebSearch(root: JSONObject): Boolean {
-        val metadata = root.optJSONArray("candidates")
-            ?.optJSONObject(0)
-            ?.optJSONObject("groundingMetadata") ?: return false
-        if ((metadata.optJSONArray("webSearchQueries")?.length() ?: 0) > 0) return true
-        val chunks = metadata.optJSONArray("groundingChunks") ?: JSONArray()
-        for (index in 0 until chunks.length()) {
-            if (chunks.optJSONObject(index)?.optJSONObject("web") != null) return true
-        }
-        return metadata.optJSONObject("searchEntryPoint")
-            ?.optString("renderedContent")
-            .orEmpty()
-            .isNotBlank()
-    }
-
-    private fun extractOpenAiText(response: String): String {
-        val output = JSONObject(response).optJSONArray("output") ?: JSONArray()
-        for (index in 0 until output.length()) {
-            val content = output.optJSONObject(index)?.optJSONArray("content") ?: continue
-            for (contentIndex in 0 until content.length()) {
-                val part = content.optJSONObject(contentIndex) ?: continue
-                if (part.optString("type") == "output_text") return part.getString("text")
-            }
-        }
-        throw IOException("GPT 응답에 채팅 답변이 없습니다.")
+        return SideChatComposer.compose(stream.finish(), request, "Gemini")
     }
 
     private fun userPayload(request: EnhancementRequest): String {
@@ -782,36 +635,6 @@ class AiClient(private val secureStore: SecureStore) {
         }
     }
 
-    private fun parseSideChatResult(
-        jsonText: String,
-        provider: String,
-    ): SideChatResult {
-        val cleaned = jsonText
-            .trim()
-            .removePrefix("```json")
-            .removePrefix("```")
-            .removeSuffix("```")
-            .trim()
-        val root = JSONObject(cleaned)
-        val reply = root.optString("reply").trim()
-        require(reply.isNotBlank()) { "AI 채팅 답변이 비어 있습니다." }
-        val action = root.optJSONObject("action")
-        val followUpQueries = root.optJSONArray("related_queries")?.let { values ->
-            buildList {
-                for (index in 0 until values.length()) add(values.optString(index))
-            }
-        }.orEmpty()
-        return SideChatResult(
-            reply = reply.take(12_000),
-            action = SideChatAction.normalize(
-                name = action?.optString("name"),
-                value = action?.optString("value"),
-            ),
-            provider = provider,
-            followUpQueries = SearchFollowUpPolicy.normalize(followUpQueries),
-        )
-    }
-
     private fun postJson(
         url: String,
         body: JSONObject,
@@ -859,12 +682,76 @@ class AiClient(private val secureStore: SecureStore) {
         }
     }
 
-    private fun validateGeminiRequestBody(body: JSONObject, searchEnabled: Boolean) {
+    // text/event-stream 응답을 줄 단위로 읽어 data 이벤트마다 JSON을 넘긴다.
+    private fun postEventStream(
+        url: String,
+        body: JSONObject,
+        headers: Map<String, String>,
+        provider: String,
+        maxRequestBytes: Int,
+        call: SideChatCall,
+        onEvent: (JSONObject) -> Unit,
+    ) {
+        call.ensureActive()
+        val payload = RequestSizePolicy.encodedOrThrow(
+            serialized = body.toString(),
+            provider = provider,
+            limitBytes = maxRequestBytes,
+        )
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = CHAT_READ_TIMEOUT_MS
+            doOutput = true
+            useCaches = false
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            setRequestProperty("Accept", "text/event-stream")
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
+            setFixedLengthStreamingMode(payload.size)
+        }
+        call.attach(connection)
+        try {
+            connection.outputStream.use { it.write(payload) }
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val response = connection.errorStream
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+                    .orEmpty()
+                val message = runCatching {
+                    JSONObject(response).optJSONObject("error")?.optString("message")
+                }.getOrNull().orEmpty()
+                throw IOException(
+                    if (message.isBlank()) "AI 서버 오류 ($status)" else "AI 서버 오류: $message",
+                )
+            }
+            val parser = ServerSentEventParser { data ->
+                runCatching { JSONObject(data) }.getOrNull()?.let(onEvent)
+            }
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                while (true) {
+                    call.ensureActive()
+                    parser.line(reader.readLine() ?: break)
+                }
+            }
+            parser.finish()
+            call.ensureActive()
+        } finally {
+            call.detach(connection)
+            connection.disconnect()
+        }
+    }
+
+    private fun validateGeminiRequestBody(
+        body: JSONObject,
+        searchEnabled: Boolean,
+        structuredOutput: Boolean = true,
+    ) {
         val fields = buildSet {
             val names = body.keys()
             while (names.hasNext()) add(names.next())
         }
-        require(GeminiRequestContract.matches(fields, searchEnabled)) {
+        require(GeminiRequestContract.matches(fields, searchEnabled, structuredOutput)) {
             "Gemini 요청 필드가 지원 계약과 일치하지 않습니다: ${fields.sorted()}"
         }
     }
@@ -979,6 +866,8 @@ class AiClient(private val secureStore: SecureStore) {
 
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000
+        // 웹 검색과 추론 중에는 글 조각이 한동안 오지 않을 수 있다.
+        private const val CHAT_READ_TIMEOUT_MS = 120_000
 
         private val SYSTEM_INSTRUCTIONS = """
             당신은 한국어 중심의 '글 강화기'다. 사용자는 횡설수설하거나, 맞춤법이 틀리거나,

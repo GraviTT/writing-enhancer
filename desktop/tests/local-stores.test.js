@@ -179,7 +179,7 @@ test("사이드 채팅은 AI 검색 답변의 안전한 출처만 함께 보존�
     );
     const restored = new SideChatStore(filePath).list();
     assert.deepEqual(restored[1].sources, [
-      { title: "공식 출처", url: "https://example.com/source" }
+      { title: "공식 출처", url: "https://example.com/source", cited: false, query: "" }
     ]);
     assert.deepEqual(restored[0].sources, []);
     assert.deepEqual(restored[1].relatedQueries, [

@@ -300,6 +300,17 @@
             </div>
           </div>
 
+          <div id="sourceDialog" class="chat-confirm source-dialog is-hidden" role="dialog" aria-modal="true" aria-labelledby="sourceDialogTitle">
+            <div class="chat-confirm-card source-dialog-card">
+              <strong id="sourceDialogTitle">출처 확인</strong>
+              <div id="sourceDialogBody" class="source-dialog-body"></div>
+              <div class="chat-confirm-actions">
+                <button id="sourceDialogCancel" type="button">취소</button>
+                <button id="sourceDialogConfirm" class="danger" type="button">확인</button>
+              </div>
+            </div>
+          </div>
+
           <div id="chatToast" class="chat-toast is-hidden" role="alert">
             <span id="chatToastText"></span>
             <button id="chatToastAction" class="is-hidden" type="button">설정 열기</button>
@@ -430,6 +441,7 @@
     <script src="./visual-crop.js"></script>
     <script src="./side-chat-rules.js"></script>
     <script src="./side-chat-text.js"></script>
+    <script src="./chat-answer.js"></script>
     <script src="./renderer.js"></script>
     <script src="./side-chat.js"></script>
   </body>

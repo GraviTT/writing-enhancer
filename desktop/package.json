@@ -1,6 +1,6 @@
 {
   "name": "writing-enhancer-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "생각나는 대로 쓰면 전달할 수 있는 글로 완성해 주는 Windows 데스크톱 앱",
   "main": "src/main.js",
   "author": "Writing Enhancer",

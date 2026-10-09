@@ -7,8 +7,8 @@ Windows와 Android 앱의 사이드 채팅은 아래 두 파일을 함께 씁니
 
 | 파일 | 내용 |
 |---|---|
-| `rules/side-chat-rules.json` | 시스템 지시문, 요청 글 틀, 응답 JSON 형식, 검색 강제·금지 정규식, 동작 분류, 진행 표시·적용 카드 문구, 각종 한도 |
-| `rules/side-chat-cases.json` | 두 앱 테스트가 똑같이 통과해야 하는 사례 (검색 판단, 적용 확인, 문구, 요청 글) |
+| `rules/side-chat-rules.json` | 시스템 지시문, 요청 글 틀, 답변 형식(일반 글 + 끝의 `app-control` 제어 블록), 검색 강제·금지 정규식, 동작 이름·분류, 진행 표시·적용 카드·출처 확인 창 문구, 각종 한도 |
+| `rules/side-chat-cases.json` | 두 앱 테스트가 똑같이 통과해야 하는 사례 (검색 판단, 적용 확인, 문구, 요청 글, 스트리밍 표시, 제어 블록 읽기, 요청 분류, 답변 서식·문장 출처 위치) |
 
 고친 뒤에는 이 폴더에서 다음을 실행합니다.
 
@@ -22,6 +22,9 @@ npm run rules
 - `android/app/src/main/java/com/example/writingenhancer/ai/SharedSideChatRules.kt` — Android 앱이 읽는 규칙
 - `android/app/src/test/java/com/example/writingenhancer/ai/SharedSideChatCases.kt` — Android 테스트용 사례.
   요청 글 기대값은 Windows 구현으로 만들어, Android가 **글자 단위로 같은 요청**을 보내는지 확인합니다.
+
+답변 처리 규칙의 구현은 Windows `desktop/src/renderer/chat-answer.js`와 Android `ai/ChatAnswer.kt` 두 곳에
+있으며, 위 공통 사례로 같은 결과를 내는지 검사합니다. 한쪽을 고치면 다른 쪽도 함께 고칩니다.
 
 `npm test`는 생성 파일이 원본과 같은지도 검사합니다(`npm run rules:check`). 규칙만 고치고
 생성을 잊으면 이 검사와 GitHub의 자동 검사가 실패합니다.

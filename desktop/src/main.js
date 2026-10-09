@@ -35,6 +35,7 @@ const { HistoryStore } = require("./lib/history-store");
 const { groundMemoryCandidates } = require("./lib/memory-grounding");
 const { MemoryStore } = require("./lib/memory-store");
 const { SideChatStore } = require("./lib/side-chat-store");
+const chatAnswer = require("./renderer/chat-answer");
 const enhancementLevels = require("./renderer/enhancement-levels");
 const {
   DEFAULT_SHORTCUT,
@@ -205,6 +206,35 @@ function sendSideChatProgress(progress) {
   });
 }
 
+// 스트리밍 글을 40ms마다 모아 화면에 보낸다. 제어 블록은 보내지 않는다.
+function createSideChatDeltaSender() {
+  let latest = "";
+  let timer = null;
+  const send = () => {
+    timer = null;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send("side-chat:delta", { text: chatAnswer.visibleStreamText(latest) });
+  };
+  return {
+    push(text) {
+      latest = String(text || "");
+      if (!timer) timer = setTimeout(send, 40);
+    },
+    reset() {
+      latest = "";
+      if (timer) clearTimeout(timer);
+      timer = null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("side-chat:delta", { text: "" });
+      }
+    },
+    stop() {
+      if (timer) clearTimeout(timer);
+      timer = null;
+    }
+  };
+}
+
 function discardPendingSideChatAction() {
   pendingSideChatAction = null;
 }
@@ -219,6 +249,7 @@ async function requestSideChatReply({ input, messages, attachments = [], forceSe
   discardPendingSideChatAction();
   const controller = new AbortController();
   activeSideChatRequest = controller;
+  const deltas = createSideChatDeltaSender();
   try {
     return await aiClient.chat({
       input,
@@ -228,9 +259,15 @@ async function requestSideChatReply({ input, messages, attachments = [], forceSe
       screenContext: attachments.length > 0,
       forceSearch,
       signal: controller.signal,
-      onProgress: sendSideChatProgress
+      onProgress: (progress) => {
+        // 다른 AI로 다시 물으면 앞서 흘려 보낸 글을 지운다.
+        if (progress?.stage === "fallback") deltas.reset();
+        sendSideChatProgress(progress);
+      },
+      onDelta: (text) => deltas.push(text)
     });
   } finally {
+    deltas.stop();
     if (activeSideChatRequest === controller) activeSideChatRequest = null;
   }
 }
@@ -250,6 +287,17 @@ function settleSideChatAction(result) {
   return { action: dispatchWritingAction(action), pendingAction: null };
 }
 
+function sideChatMessageOptions(result) {
+  return {
+    externalGrounding: result.externalGrounding === true,
+    sourcesMissing: result.sourcesMissing === true,
+    citations: result.citations,
+    styles: result.styles,
+    category: result.category,
+    searchQueries: result.searchQueries
+  };
+}
+
 function sideChatReplyResponse(messages, result) {
   const settled = settleSideChatAction(result);
   return {
@@ -263,7 +311,8 @@ function sideChatReplyResponse(messages, result) {
       model: result.model,
       fallbackUsed: result.fallbackUsed,
       webSearchUsed: result.webSearchUsed === true,
-      sourcesMissing: result.sourcesMissing === true
+      sourcesMissing: result.sourcesMissing === true,
+      category: result.category
     }
   };
 }
@@ -509,6 +558,8 @@ async function captureQaScreens() {
   await captureChat("window.__sideChatQa?.showEditDemo()", "v4-03-side-chat-edit.png");
   await captureChat("window.__sideChatQa?.showSearchDemo()", "v5-01-side-chat-confirm.png");
   await captureChat("window.__sideChatQa?.showProgressDemo()", "v5-02-side-chat-progress.png");
+  await captureChat("window.__sideChatQa?.showSourceDialogDemo()", "v5-03-side-chat-source-dialog.png");
+  await captureChat("window.__sideChatQa?.showStreamingDemo()", "v5-04-side-chat-streaming.png");
   await mainWindow.webContents.executeJavaScript('window.writingPanel?.showSurface("writing")');
   setPanelState(true, { focus: false, remember: false });
   await setQa("opacity-min");  setPanelState(true, { focus: false, remember: false });
@@ -829,10 +880,7 @@ function registerIpcHandlers() {
         result.reply,
         result.sources,
         result.relatedQueries,
-        {
-          externalGrounding: result.externalGrounding === true,
-          sourcesMissing: result.sourcesMissing === true
-        }
+        sideChatMessageOptions(result)
       );
       return sideChatReplyResponse(messages, result);
     } catch (error) {
@@ -889,10 +937,7 @@ function registerIpcHandlers() {
           result.reply,
           result.sources,
           result.relatedQueries,
-          {
-            externalGrounding: result.externalGrounding === true,
-            sourcesMissing: result.sourcesMissing === true
-          }
+          sideChatMessageOptions(result)
         );
         return sideChatReplyResponse(messages, result);
       } catch (error) {
