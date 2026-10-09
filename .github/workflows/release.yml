@@ -129,13 +129,17 @@ jobs:
       - name: 서명 인증서가 설치된 앱과 같은지 확인
         working-directory: android
         run: |
-          apksigner="$(ls -d "${ANDROID_HOME}"/build-tools/* | sort -V | tail -1)/apksigner"
-          actual=$("${apksigner}" verify --print-certs "WritingEnhancer-${{ needs.plan.outputs.version }}.apk" \
-            | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)$/\1/p')
+          sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          apksigner=$(find "${sdk}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -1)
+          output=$("${apksigner:-apksigner}" verify --print-certs "WritingEnhancer-${{ needs.plan.outputs.version }}.apk" 2>&1 || true)
+          actual=$(printf '%s\n' "${output}" \
+            | sed -nE 's/^Signer #1 certificate SHA-256 digest: ([0-9a-f]+)[[:space:]]*$/\1/p' | head -1)
           expected=$(tr -d '[:space:]' < signing-certificate.sha256)
-          echo "서명 인증서: ${actual}"
+          echo "apksigner: ${apksigner:-없음}"
+          printf '%s\n' "${output}"
           if [ "${actual}" != "${expected}" ]; then
-            echo "::error::APK 서명 인증서(${actual:-읽지 못함})가 설치된 앱(${expected})과 다릅니다. 이 APK로는 덮어 설치할 수 없어 배포하지 않습니다."
+            summary=$(printf '%s' "${output}" | head -c 300 | tr '\r\n' '  ')
+            echo "::error::APK 서명 인증서(${actual:-읽지 못함})가 설치된 앱(${expected})과 다릅니다. 이 APK로는 덮어 설치할 수 없어 배포하지 않습니다. apksigner=${apksigner:-없음}, 출력: ${summary}"
             exit 1
           fi
 
