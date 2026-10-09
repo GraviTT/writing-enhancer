@@ -100,7 +100,18 @@ jobs:
             echo "::error::ANDROID_SIGNING_KEYSTORE_BASE64 비밀값이 없습니다. android/scripts/copy-signing-key.ps1로 복사해 등록한 뒤 이 작업을 다시 실행하세요."
             exit 1
           fi
-          echo "${KEYSTORE_BASE64}" | base64 --decode > "${RUNNER_TEMP}/signing.keystore"
+          printf '%s' "${KEYSTORE_BASE64}" | tr -d '[:space:]' | base64 --decode > "${RUNNER_TEMP}/signing.keystore"
+          # 키를 쓰기 전에, 등록된 키가 설치된 앱의 키와 같은지 먼저 확인한다(지문은 공개 정보).
+          keystore=$(keytool -list -v -keystore "${RUNNER_TEMP}/signing.keystore" -storepass android 2>&1 || true)
+          found=$(printf '%s\n' "${keystore}" | sed -nE 's/^[[:space:]]*SHA256: ([0-9A-F:]+)$/\1/p' | head -1 | tr -d ':' | tr 'A-F' 'a-f')
+          owner=$(printf '%s\n' "${keystore}" | sed -nE 's/^(Owner|소유자): (.*)$/\2/p' | head -1)
+          expected=$(tr -d '[:space:]' < android/signing-certificate.sha256)
+          size=$(wc -c < "${RUNNER_TEMP}/signing.keystore")
+          echo "등록된 키: ${size}바이트, 인증서 ${found:-읽지 못함} (${owner:-소유자 없음})"
+          if [ "${found}" != "${expected}" ]; then
+            echo "::error::등록된 서명 키(${size}바이트, 인증서 ${found:-읽지 못함}, ${owner:-소유자 없음})가 설치된 앱의 키(${expected})와 다릅니다. android/scripts/copy-signing-key.ps1로 다시 복사해 비밀값을 덮어쓰세요."
+            exit 1
+          fi
 
       - name: 테스트와 APK 만들기
         working-directory: android
@@ -124,7 +135,7 @@ jobs:
           expected=$(tr -d '[:space:]' < signing-certificate.sha256)
           echo "서명 인증서: ${actual}"
           if [ "${actual}" != "${expected}" ]; then
-            echo "::error::서명 인증서가 설치된 앱과 다릅니다. 이 APK로는 덮어 설치할 수 없어 배포하지 않습니다."
+            echo "::error::APK 서명 인증서(${actual:-읽지 못함})가 설치된 앱(${expected})과 다릅니다. 이 APK로는 덮어 설치할 수 없어 배포하지 않습니다."
             exit 1
           fi
 
