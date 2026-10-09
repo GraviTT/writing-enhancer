@@ -208,6 +208,28 @@ test("사이드 채팅은 화면 원본 대신 외부 provenance boolean만 저�
     assert.doesNotMatch(raw, /(?:image\/png|base64|screenAttachment|화면 원본)/u);
   }));
 
+test("검색 출처를 확인하지 못한 답변 표시는 AI 메시지에만 저장하고 복원한다", () =>
+  withDirectory((directory) => {
+    const filePath = path.join(directory, "side-chat.json");
+    const store = new SideChatStore(filePath);
+    store.appendExchange("최신 규정 검색해줘", "확인하지 못했어요", [], [], {
+      externalGrounding: true,
+      sourcesMissing: true
+    });
+    store.appendExchange("고마워", "천만에요", [], [], { externalGrounding: false });
+    const restored = new SideChatStore(filePath).list();
+    assert.equal(restored[0].sourcesMissing, false);
+    assert.equal(restored[1].sourcesMissing, true);
+    assert.equal(restored[3].sourcesMissing, false);
+    const edited = store.rewriteFromUser(restored[2].id, "정말 고마워");
+    const reply = store.appendAssistant("다시 확인하지 못했어요", [], [], {
+      externalGrounding: true,
+      sourcesMissing: true
+    });
+    assert.equal(edited.length, 3);
+    assert.equal(reply.at(-1).sourcesMissing, true);
+  }));
+
 test("provenance 필드가 없던 기존 AI 메시지는 업그레이드 시 보수적으로 외부 유래로 취급한다", () =>
   withDirectory((directory) => {
     const filePath = path.join(directory, "side-chat.json");

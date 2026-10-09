@@ -134,6 +134,14 @@ try {
         throw "Expected a non-empty Windows side chat edit QA capture."
     }
     $verificationSummary.Add("Windows side chat edit QA capture: passed")
+    foreach ($name in @("v5-01-side-chat-confirm.png", "v5-02-side-chat-progress.png")) {
+        $capture = Join-Path $qaDirectory $name
+        if (-not (Test-Path -LiteralPath $capture) -or
+            (Get-Item -LiteralPath $capture).Length -le 0) {
+            throw "Expected a non-empty Windows QA capture: $name"
+        }
+    }
+    $verificationSummary.Add("Windows side chat confirm and progress QA captures: passed")
 
     $androidSdk = if ($env:ANDROID_HOME) {
         $env:ANDROID_HOME

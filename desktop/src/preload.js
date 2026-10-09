@@ -35,6 +35,10 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
   pickSideChatImage: () => ipcRenderer.invoke("side-chat:pick-image"),
   editSideChat: (messageId, input) =>
     ipcRenderer.invoke("side-chat:edit", { messageId, input }),
+  cancelSideChat: () => ipcRenderer.invoke("side-chat:cancel"),
+  applySideChatAction: (token) => ipcRenderer.invoke("side-chat:apply-action", { token }),
+  dismissSideChatAction: (token) =>
+    ipcRenderer.invoke("side-chat:dismiss-action", { token }),
   copyText: (text) => ipcRenderer.invoke("clipboard:write", { text }),
   openExternalLink: (url) => ipcRenderer.invoke("external-link:open", { url }),
   clearSideChat: () => ipcRenderer.invoke("side-chat:clear"),
@@ -75,6 +79,7 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
     subscribe("side-chat:discard-screen-context", callback),
   onSideChatWritingContext: (callback) =>
     subscribe("side-chat:writing-context-updated", callback),
+  onSideChatProgress: (callback) => subscribe("side-chat:progress", callback),
   onSideChatWritingAction: (callback) =>
     subscribe("side-chat:writing-action", callback)
 });

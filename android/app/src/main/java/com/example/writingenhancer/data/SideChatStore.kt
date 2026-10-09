@@ -39,6 +39,7 @@ object SideChatPolicy {
                         sources = sources,
                         untrustedExternalContext = message.role == "assistant" &&
                             (message.untrustedExternalContext || sources.isNotEmpty()),
+                        sourcesMissing = message.role == "assistant" && message.sourcesMissing,
                         followUpQueries = if (
                             message.role == "assistant" && sources.isNotEmpty()
                         ) {
@@ -89,6 +90,7 @@ class SideChatStore(private val secureStore: SecureStore) {
                             untrustedExternalContext =
                                 item.optBoolean("untrustedExternalContext", false) ||
                                     sources.isNotEmpty(),
+                            sourcesMissing = item.optBoolean("sourcesMissing", false),
                         ),
                     )
                 }
@@ -103,6 +105,7 @@ class SideChatStore(private val secureStore: SecureStore) {
         assistantSources: List<WebSource> = emptyList(),
         assistantFollowUpQueries: List<String> = emptyList(),
         assistantUntrustedExternalContext: Boolean = false,
+        assistantSourcesMissing: Boolean = false,
     ): List<SideChatMessage> {
         val now = System.currentTimeMillis()
         val user = message("user", userContent, now)
@@ -113,6 +116,7 @@ class SideChatStore(private val secureStore: SecureStore) {
             assistantSources,
             assistantFollowUpQueries,
             assistantUntrustedExternalContext,
+            assistantSourcesMissing,
         )
         require(user.content.isNotBlank() && assistant.content.isNotBlank())
         return save(list() + user + assistant)
@@ -124,6 +128,7 @@ class SideChatStore(private val secureStore: SecureStore) {
         assistantSources: List<WebSource> = emptyList(),
         assistantFollowUpQueries: List<String> = emptyList(),
         assistantUntrustedExternalContext: Boolean = false,
+        assistantSourcesMissing: Boolean = false,
     ): List<SideChatMessage> {
         val assistant = message(
             "assistant",
@@ -132,6 +137,7 @@ class SideChatStore(private val secureStore: SecureStore) {
             assistantSources,
             assistantFollowUpQueries,
             assistantUntrustedExternalContext,
+            assistantSourcesMissing,
         )
         require(assistant.content.isNotBlank())
         return save(list() + assistant)
@@ -160,6 +166,7 @@ class SideChatStore(private val secureStore: SecureStore) {
         sources: List<WebSource> = emptyList(),
         followUpQueries: List<String> = emptyList(),
         untrustedExternalContext: Boolean = false,
+        sourcesMissing: Boolean = false,
     ): SideChatMessage {
         val normalizedSources = if (role == "assistant") {
             WebSourcePolicy.normalize(sources)
@@ -174,6 +181,7 @@ class SideChatStore(private val secureStore: SecureStore) {
             sources = normalizedSources,
             untrustedExternalContext = role == "assistant" &&
                 (untrustedExternalContext || normalizedSources.isNotEmpty()),
+            sourcesMissing = role == "assistant" && sourcesMissing,
             followUpQueries = if (role == "assistant" && normalizedSources.isNotEmpty()) {
                 SearchFollowUpPolicy.normalize(followUpQueries)
             } else {
@@ -231,7 +239,8 @@ class SideChatStore(private val secureStore: SecureStore) {
                     .put("createdAt", message.createdAt)
                     .put("sources", sources)
                     .put("followUpQueries", followUpQueries)
-                    .put("untrustedExternalContext", message.untrustedExternalContext),
+                    .put("untrustedExternalContext", message.untrustedExternalContext)
+                    .put("sourcesMissing", message.sourcesMissing),
             )
         }
         secureStore.putString(SecureStore.SIDE_CHAT_MESSAGES, array.toString())

@@ -68,6 +68,7 @@ function normalizeMessage(value) {
     externalGrounding:
       role === "assistant" &&
       (value?.externalGrounding === true || sources.length > 0 || legacyAssistantProvenance),
+    sourcesMissing: role === "assistant" && value?.sourcesMissing === true,
     createdAt: Number.isFinite(Date.parse(value?.createdAt))
       ? new Date(value.createdAt).toISOString()
       : new Date().toISOString()
@@ -132,7 +133,8 @@ class SideChatStore {
       content: assistantContent,
       sources: assistantSources,
       relatedQueries: assistantRelatedQueries,
-      externalGrounding: options?.externalGrounding === true
+      externalGrounding: options?.externalGrounding === true,
+      sourcesMissing: options?.sourcesMissing === true
     });
     if (!user || !assistant) {
       throw new Error("사용자 메시지와 AI 답변이 모두 있어야 대화를 저장할 수 있습니다.");
@@ -153,7 +155,8 @@ class SideChatStore {
       content: assistantContent,
       sources: assistantSources,
       relatedQueries: assistantRelatedQueries,
-      externalGrounding: options?.externalGrounding === true
+      externalGrounding: options?.externalGrounding === true,
+      sourcesMissing: options?.sourcesMissing === true
     });
     if (!assistant) {
       throw new Error("AI 답변이 있어야 대화를 저장할 수 있습니다.");

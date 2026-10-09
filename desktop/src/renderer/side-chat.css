@@ -305,6 +305,80 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+.message-note {
+  margin: 7px 0 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #fff6e5;
+  color: #7a4f00;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pending-action {
+  width: min(100%, 320px);
+  padding: 11px 12px;
+  border: 1px solid rgba(105, 87, 244, 0.28);
+  border-radius: 14px 14px 14px 5px;
+  background: #faf9ff;
+  font-size: 12px;
+}
+
+.pending-action strong {
+  display: block;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.pending-action-label {
+  display: block;
+  margin-top: 3px;
+  color: #49389d;
+  font-weight: 700;
+}
+
+.pending-action-preview {
+  max-height: 132px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  overflow: auto;
+  border-radius: 9px;
+  background: white;
+  color: #343044;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.pending-action p {
+  margin: 7px 0 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pending-action-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pending-action-buttons button {
+  min-width: 58px;
+  min-height: 30px;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: 9px;
+  background: #efedf4;
+  color: #5f596c;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.pending-action-buttons .primary {
+  background: var(--purple);
+  color: white;
+}
+
 .message-sources {
   display: flex;
   flex-wrap: wrap;
@@ -457,14 +531,26 @@ button:disabled {
 .typing {
   align-self: flex-start;
   display: flex;
-  gap: 4px;
-  padding: 12px 13px;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 13px;
   border: 1px solid var(--line);
   border-radius: 14px 14px 14px 5px;
   background: white;
 }
 
-.typing span {
+.typing-dots {
+  display: flex;
+  gap: 4px;
+}
+
+.typing-label {
+  color: #625b72;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.typing-dots span {
   width: 5px;
   height: 5px;
   border-radius: 50%;
@@ -472,11 +558,11 @@ button:disabled {
   animation: thinking 900ms ease-in-out infinite;
 }
 
-.typing span:nth-child(2) {
+.typing-dots span:nth-child(2) {
   animation-delay: 120ms;
 }
 
-.typing span:nth-child(3) {
+.typing-dots span:nth-child(3) {
   animation-delay: 240ms;
 }
 
@@ -508,7 +594,7 @@ button:disabled {
 
 .composer-main {
   display: grid;
-  grid-template-columns: 31px 31px minmax(0, 1fr) 38px;
+  grid-template-columns: 31px 31px 31px minmax(0, 1fr) 38px;
   align-items: end;
   gap: 6px;
 }
@@ -720,6 +806,20 @@ button:disabled {
 
 #chatInput::placeholder {
   color: #777184;
+}
+
+#sendChatButton .stop-icon,
+#sendChatButton[data-mode="stop"] .send-icon {
+  display: none;
+}
+
+#sendChatButton[data-mode="stop"] .stop-icon {
+  display: block;
+  fill: currentColor;
+}
+
+#sendChatButton[data-mode="stop"] {
+  background: #3a3550;
 }
 
 #sendChatButton {

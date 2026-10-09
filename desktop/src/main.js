@@ -35,11 +35,6 @@ const { HistoryStore } = require("./lib/history-store");
 const { groundMemoryCandidates } = require("./lib/memory-grounding");
 const { MemoryStore } = require("./lib/memory-store");
 const { SideChatStore } = require("./lib/side-chat-store");
-const {
-  enforceGroundedAction,
-  groundedActionBlocked,
-  prepareSideChatContext
-} = require("./lib/side-chat-policy");
 const enhancementLevels = require("./renderer/enhancement-levels");
 const {
   DEFAULT_SHORTCUT,
@@ -80,6 +75,9 @@ let shortcutStatus = {
   warning: ""
 };
 const pendingMemoryApprovals = new Map();
+// 진행 중인 사이드 채팅 요청과, 사용자 확인을 기다리는 채팅 제안 동작.
+let activeSideChatRequest = null;
+let pendingSideChatAction = null;
 
 function suppressAutoCollapse(durationMs = 900) {
   autoCollapseSuppressedUntil = Math.max(
@@ -194,8 +192,7 @@ function restoreSideChatInputFocus() {
   sideChatWindow.webContents.send("side-chat:focus-input");
 }
 
-function dispatchWritingAction(action, { externallyGrounded = false } = {}) {
-  if (externallyGrounded) return null;
+function dispatchWritingAction(action) {
   const name = limitedText(action?.name, 80) || "none";
   if (name === "none" || !mainWindow || mainWindow.isDestroyed()) return null;
   const normalized = {
@@ -206,6 +203,78 @@ function dispatchWritingAction(action, { externallyGrounded = false } = {}) {
   mainWindow.focus();
   mainWindow.webContents.send("side-chat:writing-action", normalized);
   return normalized;
+}
+
+function sendSideChatProgress(progress) {
+  if (!sideChatWindow || sideChatWindow.isDestroyed()) return;
+  sideChatWindow.webContents.send("side-chat:progress", {
+    stage: limitedText(progress?.stage, 40),
+    provider: limitedText(progress?.provider, 40),
+    searchPolicy: limitedText(progress?.searchPolicy, 40)
+  });
+}
+
+function discardPendingSideChatAction() {
+  pendingSideChatAction = null;
+}
+
+function cancelActiveSideChatRequest() {
+  activeSideChatRequest?.abort();
+  activeSideChatRequest = null;
+}
+
+async function requestSideChatReply({ input, messages, attachments = [], forceSearch = false }) {
+  cancelActiveSideChatRequest();
+  discardPendingSideChatAction();
+  const controller = new AbortController();
+  activeSideChatRequest = controller;
+  try {
+    return await aiClient.chat({
+      input,
+      messages,
+      writingContext: getWritingContext(),
+      attachments,
+      screenContext: attachments.length > 0,
+      forceSearch,
+      signal: controller.signal,
+      onProgress: sendSideChatProgress
+    });
+  } finally {
+    if (activeSideChatRequest === controller) activeSideChatRequest = null;
+  }
+}
+
+// 외부 자료가 섞인 답변의 동작은 바로 실행하지 않고 사용자가 [적용]을 누를 때까지 보관한다.
+function settleSideChatAction(result) {
+  const name = limitedText(result?.action?.name, 80) || "none";
+  if (name === "none") return { action: null, pendingAction: null };
+  const action = { name, value: limitedText(result?.action?.value, 12_000) };
+  if (result?.actionRequiresConfirmation === true) {
+    pendingSideChatAction = { token: crypto.randomUUID(), action };
+    return {
+      action: null,
+      pendingAction: { token: pendingSideChatAction.token, ...action }
+    };
+  }
+  return { action: dispatchWritingAction(action), pendingAction: null };
+}
+
+function sideChatReplyResponse(messages, result) {
+  const settled = settleSideChatAction(result);
+  return {
+    ok: true,
+    messages,
+    action: settled.action,
+    pendingAction: settled.pendingAction,
+    result: {
+      reply: result.reply,
+      provider: result.provider,
+      model: result.model,
+      fallbackUsed: result.fallbackUsed,
+      webSearchUsed: result.webSearchUsed === true,
+      sourcesMissing: result.sourcesMissing === true
+    }
+  };
 }
 
 function createTrayIcon() {
@@ -583,6 +652,18 @@ async function captureQaScreens() {
     path.join(qaDirectory, "v4-03-side-chat-edit.png"),
     sideChatEditImage.toPNG()
   );
+  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showSearchDemo()");
+  await wait(120);
+  fs.writeFileSync(
+    path.join(qaDirectory, "v5-01-side-chat-confirm.png"),
+    (await sideChatWindow.webContents.capturePage()).toPNG()
+  );
+  await sideChatWindow.webContents.executeJavaScript("window.__sideChatQa?.showProgressDemo()");
+  await wait(120);
+  fs.writeFileSync(
+    path.join(qaDirectory, "v5-02-side-chat-progress.png"),
+    (await sideChatWindow.webContents.capturePage()).toPNG()
+  );
   sideChatWindow.hide();
   setPanelState(true, { focus: false, remember: false });
   await setQa("opacity-min");
@@ -913,6 +994,8 @@ function registerIpcHandlers() {
     return { focused: true };
   });
   ipcMain.handle("side-chat:clear", async () => {
+    cancelActiveSideChatRequest();
+    discardPendingSideChatAction();
     const removed = sideChatStore.clear();
     restoreSideChatInputFocus();
     setTimeout(restoreSideChatInputFocus, 80);
@@ -977,56 +1060,57 @@ function registerIpcHandlers() {
         error.code = "INVALID_VISUAL_CONTEXT";
         throw error;
       }
-      const provenance = prepareSideChatContext(input, sideChatStore.list());
-      let result = await aiClient.chat({
+      const result = await requestSideChatReply({
         input,
-        messages: provenance.messages,
-        writingContext: getWritingContext(),
+        messages: sideChatStore.list(),
         attachments: screenAttachments,
-        screenContext: screenAttachments.length > 0,
-        forceSearch,
-        priorExternalContext: provenance.priorExternalContext,
-        externalApplyIntent: provenance.externalApplyIntent
+        forceSearch
       });
-      result = enforceGroundedAction(result, {
-        screenContext: screenAttachments.length > 0,
-        priorExternalContext: provenance.priorExternalContext,
-        externalApplyIntent: provenance.externalApplyIntent
-      });
-      const externalGrounding =
-        result.externalGrounding === true ||
-        screenAttachments.length > 0 ||
-        provenance.priorExternalContext ||
-        result.webSearchUsed === true ||
-        (Array.isArray(result.sources) && result.sources.length > 0);
       const messages = sideChatStore.appendExchange(
         input,
         result.reply,
         result.sources,
         result.relatedQueries,
-        { externalGrounding }
-      );
-      const action = dispatchWritingAction(result.action, {
-        externallyGrounded: groundedActionBlocked(result, {
-          screenContext: screenAttachments.length > 0,
-          priorExternalContext: provenance.priorExternalContext
-        })
-      });
-      return {
-        ok: true,
-        messages,
-        action,
-        result: {
-          reply: result.reply,
-          provider: result.provider,
-          model: result.model,
-          fallbackUsed: result.fallbackUsed,
-          webSearchUsed: result.webSearchUsed === true
+        {
+          externalGrounding: result.externalGrounding === true,
+          sourcesMissing: result.sourcesMissing === true
         }
-      };
+      );
+      return sideChatReplyResponse(messages, result);
     } catch (error) {
       return { ok: false, error: safeError(error) };
     }
+  });
+  ipcMain.handle("side-chat:cancel", () => {
+    const cancelled = Boolean(activeSideChatRequest);
+    cancelActiveSideChatRequest();
+    return { cancelled };
+  });
+  ipcMain.handle("side-chat:apply-action", (_event, request) => {
+    const token = limitedText(request?.token, 80);
+    if (!token || pendingSideChatAction?.token !== token) {
+      return {
+        ok: false,
+        error: {
+          code: "ACTION_EXPIRED",
+          message: "적용할 제안이 만료됐어요. 다시 요청해 주세요."
+        }
+      };
+    }
+    const { action } = pendingSideChatAction;
+    discardPendingSideChatAction();
+    const dispatched = dispatchWritingAction(action);
+    return dispatched
+      ? { ok: true, action: dispatched }
+      : {
+          ok: false,
+          error: { code: "WRITING_UNAVAILABLE", message: "글 강화기 창을 찾지 못했어요." }
+        };
+  });
+  ipcMain.handle("side-chat:dismiss-action", (_event, request) => {
+    const token = limitedText(request?.token, 80);
+    if (token && pendingSideChatAction?.token === token) discardPendingSideChatAction();
+    return { dismissed: true };
   });
   ipcMain.handle("side-chat:edit", async (_event, request) => {
     try {
@@ -1042,46 +1126,17 @@ function registerIpcHandlers() {
       const truncated = sideChatStore.rewriteFromUser(messageId, input);
       const priorMessages = truncated.slice(0, -1);
       try {
-        const provenance = prepareSideChatContext(input, priorMessages);
-        let result = await aiClient.chat({
-          input,
-          messages: provenance.messages,
-          writingContext: getWritingContext(),
-          priorExternalContext: provenance.priorExternalContext,
-          externalApplyIntent: provenance.externalApplyIntent
-        });
-        result = enforceGroundedAction(result, {
-          priorExternalContext: provenance.priorExternalContext,
-          externalApplyIntent: provenance.externalApplyIntent
-        });
-        const externalGrounding =
-          result.externalGrounding === true ||
-          provenance.priorExternalContext ||
-          result.webSearchUsed === true ||
-          (Array.isArray(result.sources) && result.sources.length > 0);
+        const result = await requestSideChatReply({ input, messages: priorMessages });
         const messages = sideChatStore.appendAssistant(
           result.reply,
           result.sources,
           result.relatedQueries,
-          { externalGrounding }
-        );
-        const action = dispatchWritingAction(result.action, {
-          externallyGrounded: groundedActionBlocked(result, {
-            priorExternalContext: provenance.priorExternalContext
-          })
-        });
-        return {
-          ok: true,
-          messages,
-          action,
-          result: {
-            reply: result.reply,
-            provider: result.provider,
-            model: result.model,
-            fallbackUsed: result.fallbackUsed,
-            webSearchUsed: result.webSearchUsed === true
+          {
+            externalGrounding: result.externalGrounding === true,
+            sourcesMissing: result.sourcesMissing === true
           }
-        };
+        );
+        return sideChatReplyResponse(messages, result);
       } catch (error) {
         return {
           ok: false,

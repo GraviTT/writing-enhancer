@@ -17,6 +17,7 @@ const elements = Object.fromEntries(
     "sendChatButton",
     "screenCaptureButton",
     "imagePickButton",
+    "searchModeButton",
     "visualPreview",
     "visualPreviewOpenButton",
     "visualPreviewImage",
@@ -41,6 +42,13 @@ const elements = Object.fromEntries(
 const state = {
   messages: [],
   busy: false,
+  // AI 답변을 기다리는 중이면 보내기 버튼이 중단 버튼이 된다.
+  replying: false,
+  // 다음 질문 한 번만 웹 검색을 강제한다.
+  searchMode: false,
+  progress: null,
+  progressTimer: undefined,
+  pendingAction: null,
   capturingScreen: false,
   screenCaptureAttempt: 0,
   screenAttachment: null,
@@ -63,7 +71,16 @@ function updateScreenContextUi() {
   elements.screenCaptureButton.classList.toggle("is-capturing", state.capturingScreen);
   elements.screenCaptureButton.disabled = state.busy || state.capturingScreen;
   elements.imagePickButton.disabled = state.busy || state.capturingScreen;
-  elements.sendChatButton.disabled = state.busy || state.capturingScreen;
+  elements.searchModeButton.disabled = state.busy || state.capturingScreen;
+  elements.searchModeButton.classList.toggle("is-active", state.searchMode);
+  elements.searchModeButton.setAttribute("aria-pressed", state.searchMode ? "true" : "false");
+  elements.sendChatButton.disabled = state.capturingScreen || (state.busy && !state.replying);
+  elements.sendChatButton.dataset.mode = state.replying ? "stop" : "send";
+  elements.sendChatButton.setAttribute(
+    "aria-label",
+    state.replying ? "답변 중단" : "메시지 보내기"
+  );
+  elements.sendChatButton.title = state.replying ? "답변 중단" : "";
   elements.screenCaptureButton.setAttribute("aria-pressed", hasScreen ? "true" : "false");
   elements.visualPreview.classList.toggle("is-hidden", !hasScreen);
   if (hasScreen) {
@@ -110,7 +127,7 @@ async function captureScreenContext() {
   state.capturingScreen = false;
   if (response?.ok && response.attachment) {
     state.screenAttachment = response.attachment;
-    showToast("화면을 확인했어요. 필요하면 검색할 영역을 선택하세요.");
+    showToast("화면을 확인했어요. 필요하면 물어볼 영역을 선택하세요.");
   } else {
     state.screenAttachment = null;
     showToast(response?.error?.message || "현재 화면을 촬영하지 못했어요.");
@@ -132,7 +149,7 @@ async function pickImageContext() {
   } else if (response.attachment) {
     state.screenAttachment = response.attachment;
     updateScreenContextUi();
-    showToast("이미지를 확인했어요. 필요하면 검색할 영역을 선택하세요.");
+    showToast("이미지를 확인했어요. 필요하면 물어볼 영역을 선택하세요.");
   }
   focusChatInput();
 }
@@ -247,7 +264,7 @@ function applyCropSelection() {
   };
   closeCropDialog();
   updateScreenContextUi();
-  showToast("선택한 영역을 다음 질문에서 검색해요.");
+  showToast("선택한 영역을 다음 질문에 함께 보내요.");
 }
 
 function autoGrow() {
@@ -314,19 +331,22 @@ async function submitEdit(messageId, editor) {
     cancelEdit();
     return;
   }
-  state.busy = true;
   state.editingMessageId = "";
+  state.pendingAction = null;
   elements.newChatButton.disabled = true;
-  elements.sendChatButton.disabled = true;
-  updateScreenContextUi();
+  beginReply();
   state.messages = state.messages.slice(0, index);
   renderMessages({ pendingUser: input, typing: true });
-  const response = await api.editSideChat(messageId, input);
-  state.busy = false;
+  let response;
+  try {
+    response = await api.editSideChat(messageId, input);
+  } catch {
+    response = { ok: false, error: { message: "수정한 메시지로 다시 답하지 못했어요." } };
+  }
+  endReply();
   elements.newChatButton.disabled = false;
-  elements.sendChatButton.disabled = false;
-  updateScreenContextUi();
   state.messages = response?.messages || state.messages;
+  state.pendingAction = response?.ok ? response.pendingAction || null : null;
   renderMessages();
   if (!response?.ok) {
     const needsKey = response?.error?.code === "NO_API_KEY";
@@ -335,6 +355,145 @@ async function submitEdit(messageId, editor) {
     });
   }
   if (!response?.action || response.action.name === "none") focusChatInput();
+}
+
+// 답변 대기 중에는 보내기 버튼을 중단 버튼으로 바꾸고 경과 시간을 보여 준다.
+function beginReply() {
+  state.busy = true;
+  state.replying = true;
+  window.clearInterval(state.progressTimer);
+  state.progress = { startedAt: Date.now(), stage: "requesting", searchPolicy: "" };
+  state.progressTimer = window.setInterval(updateProgressLabel, 1_000);
+  updateScreenContextUi();
+}
+
+function endReply() {
+  state.busy = false;
+  state.replying = false;
+  window.clearInterval(state.progressTimer);
+  state.progressTimer = undefined;
+  state.progress = null;
+  updateScreenContextUi();
+}
+
+async function cancelReply() {
+  if (!state.replying) return;
+  elements.sendChatButton.disabled = true;
+  try {
+    await api.cancelSideChat();
+  } catch {
+    // 요청이 이미 끝났으면 응답 처리 쪽에서 상태를 정리한다.
+  }
+}
+
+function progressLabelText() {
+  const progress = state.progress;
+  if (!progress) return "AI가 답변 중";
+  const base =
+    progress.stage === "fallback"
+      ? "다른 AI로 다시 시도하는 중"
+      : progress.searchPolicy === "required"
+        ? "웹에서 찾아보는 중"
+        : "답변을 준비하는 중";
+  const seconds = Math.floor((Date.now() - progress.startedAt) / 1_000);
+  return seconds >= 3 ? `${base} · ${seconds}초` : base;
+}
+
+function updateProgressLabel() {
+  const label = elements.messageList.querySelector(".typing-label");
+  if (label) label.textContent = progressLabelText();
+}
+
+const PENDING_ACTION_LABELS = Object.freeze({
+  replace_source: "원문을 이 내용으로 바꾸기",
+  set_situation: "상황 안내를 이 내용으로 바꾸기",
+  replace_result: "이 내용을 새 결과 버전으로 추가",
+  set_follow_up_reply: "후속 요구 입력란에 넣기",
+  enhance: "지금 원문으로 완성하기",
+  reenhance: "원문 기준으로 다시 강화하기",
+  copy_result: "강화한 글 복사하기",
+  new_writing: "현재 작업을 비우고 새 글 시작",
+  guess_intent: "알아맞춰 봐 실행"
+});
+const PENDING_ACTIONS_WITH_TEXT = new Set([
+  "replace_source",
+  "set_situation",
+  "replace_result",
+  "set_follow_up_reply"
+]);
+
+function pendingActionLabel(action) {
+  if (action.name === "set_enhancement_level") {
+    return `강화 범위를 ${action.value || "?"}단계로 바꾸기`;
+  }
+  return PENDING_ACTION_LABELS[action.name] || "글 강화기 동작 실행";
+}
+
+function createPendingActionCard(action) {
+  const card = document.createElement("div");
+  card.className = "pending-action";
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", "제안 적용 확인");
+  const title = document.createElement("strong");
+  title.textContent = "이 변경을 적용할까요?";
+  const label = document.createElement("span");
+  label.className = "pending-action-label";
+  label.textContent = pendingActionLabel(action);
+  card.append(title, label);
+  const value = String(action.value || "");
+  if (PENDING_ACTIONS_WITH_TEXT.has(action.name) && value.trim()) {
+    const preview = document.createElement("div");
+    preview.className = "pending-action-preview";
+    preview.textContent = value.length > 600 ? `${value.slice(0, 600)}…` : value;
+    card.append(preview);
+  }
+  const note = document.createElement("p");
+  note.textContent = "검색·화면 자료가 섞인 대화라 내용을 확인한 뒤 적용해요.";
+  const buttons = document.createElement("div");
+  buttons.className = "pending-action-buttons";
+  const dismiss = document.createElement("button");
+  dismiss.type = "button";
+  dismiss.textContent = "취소";
+  dismiss.addEventListener("click", dismissPendingAction);
+  const apply = document.createElement("button");
+  apply.type = "button";
+  apply.className = "primary";
+  apply.textContent = "적용";
+  apply.addEventListener("click", applyPendingAction);
+  buttons.append(dismiss, apply);
+  card.append(note, buttons);
+  return card;
+}
+
+async function applyPendingAction() {
+  const action = state.pendingAction;
+  if (!action || state.busy) return;
+  state.pendingAction = null;
+  renderMessages();
+  let response;
+  try {
+    response = await api.applySideChatAction(action.token);
+  } catch {
+    response = null;
+  }
+  if (!response?.ok) {
+    showToast(response?.error?.message || "제안을 적용하지 못했어요.");
+    focusChatInput();
+  }
+}
+
+async function dismissPendingAction() {
+  const action = state.pendingAction;
+  if (!action) return;
+  state.pendingAction = null;
+  renderMessages();
+  try {
+    await api.dismissSideChatAction(action.token);
+  } catch {
+    // 보관된 제안은 다음 요청에서 어차피 폐기된다.
+  }
+  showToast("제안을 적용하지 않았어요.");
+  focusChatInput();
 }
 
 function createMessageEditor(message) {
@@ -473,6 +632,12 @@ function renderMessages({ pendingUser = "", typing = false } = {}) {
     messageText.textContent =
       message.role === "assistant" ? visibleAssistantContent(message) : message.content;
     bubble.append(messageText);
+    if (message.role === "assistant" && message.sourcesMissing === true) {
+      const note = document.createElement("p");
+      note.className = "message-note";
+      note.textContent = "웹 출처를 확인하지 못한 답변이에요. 중요한 내용은 직접 확인해 주세요.";
+      bubble.append(note);
+    }
     const sourceList = message.role === "assistant" ? createSourceList(message) : null;
     if (sourceList) bubble.append(sourceList);
     const relatedQueries =
@@ -501,15 +666,28 @@ function renderMessages({ pendingUser = "", typing = false } = {}) {
     }
     elements.messageList.append(row);
   }
+  if (state.pendingAction && !typing) {
+    const row = document.createElement("div");
+    row.className = "message-row assistant pending-action-row";
+    row.append(createPendingActionCard(state.pendingAction));
+    elements.messageList.append(row);
+  }
   if (typing) {
     const indicator = document.createElement("div");
     indicator.className = "typing";
+    indicator.setAttribute("role", "status");
     indicator.setAttribute("aria-label", "AI가 답변 중");
-    indicator.append(
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    dots.append(
       document.createElement("span"),
       document.createElement("span"),
       document.createElement("span")
     );
+    const label = document.createElement("span");
+    label.className = "typing-label";
+    label.textContent = progressLabelText();
+    indicator.append(dots, label);
     elements.messageList.append(indicator);
   }
   scrollToLatest();
@@ -548,11 +726,11 @@ async function sendMessage(options = {}) {
     return;
   }
   const screenAttachment = state.screenAttachment;
-  const forceSearch = requestedForceSearch || Boolean(screenAttachment);
+  const forceSearch = requestedForceSearch || state.searchMode;
   state.screenAttachment = null;
-  state.busy = true;
-  elements.sendChatButton.disabled = true;
-  updateScreenContextUi();
+  state.searchMode = false;
+  state.pendingAction = null;
+  beginReply();
   elements.chatInput.value = "";
   autoGrow();
   renderMessages({ pendingUser: input, typing: true });
@@ -565,11 +743,12 @@ async function sendMessage(options = {}) {
       error: { message: "답변을 가져오지 못했어요." }
     };
   }
-  state.busy = false;
-  elements.sendChatButton.disabled = false;
-  updateScreenContextUi();
+  endReply();
   if (!response?.ok) {
     elements.chatInput.value = input;
+    // 같은 질문을 다시 보낼 수 있도록 검색 강제 여부도 되돌린다.
+    state.searchMode = forceSearch;
+    updateScreenContextUi();
     autoGrow();
     renderMessages();
     const needsKey = response?.error?.code === "NO_API_KEY";
@@ -583,6 +762,7 @@ async function sendMessage(options = {}) {
     return;
   }
   state.messages = response.messages || [];
+  state.pendingAction = response.pendingAction || null;
   renderMessages();
   if (screenAttachment) {
     showToast(
@@ -624,6 +804,7 @@ async function performClearChat() {
       throw new Error("초기화 응답이 올바르지 않습니다.");
     }
     state.messages = [];
+    state.pendingAction = null;
     elements.chatInput.value = "";
     autoGrow();
     renderMessages();
@@ -730,9 +911,23 @@ elements.chatInput.addEventListener("keydown", (event) => {
     sendMessage();
   }
 });
-elements.sendChatButton.addEventListener("click", sendMessage);
+elements.sendChatButton.addEventListener("click", () => {
+  if (state.replying) cancelReply();
+  else sendMessage();
+});
 elements.screenCaptureButton.addEventListener("click", captureScreenContext);
 elements.imagePickButton.addEventListener("click", pickImageContext);
+elements.searchModeButton.addEventListener("click", () => {
+  if (state.busy || state.capturingScreen) return;
+  state.searchMode = !state.searchMode;
+  updateScreenContextUi();
+  showToast(
+    state.searchMode
+      ? "다음 질문은 웹에서 찾아보고 답해요."
+      : "검색은 AI가 필요할 때만 사용해요."
+  );
+  focusChatInput();
+});
 elements.visualPreviewOpenButton.addEventListener("click", openCropDialog);
 elements.cropVisualButton.addEventListener("click", openCropDialog);
 elements.clearScreenContextButton.addEventListener("click", () => clearScreenContext());
@@ -787,6 +982,12 @@ elements.cropCanvas.addEventListener("pointercancel", finishCropPointer);
 api.onSideChatFocus(focusChatInput);
 api.onSideChatDiscardScreenContext(() => clearScreenContext({ silent: true }));
 api.onSideChatWritingContext(renderWritingContext);
+api.onSideChatProgress((progress) => {
+  if (!state.progress) return;
+  state.progress.stage = progress?.stage || state.progress.stage;
+  state.progress.searchPolicy = progress?.searchPolicy || state.progress.searchPolicy;
+  updateProgressLabel();
+});
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (!elements.cropDialog.classList.contains("is-hidden")) {
@@ -805,6 +1006,7 @@ installResize(elements.sideChatResizeHandle);
 
 window.__sideChatQa = {
   showDemo() {
+    state.pendingAction = null;
     state.messages = [
       {
         id: "qa-user-1",
@@ -842,6 +1044,50 @@ window.__sideChatQa = {
     this.showDemo();
     state.editingMessageId = "qa-user-1";
     renderMessages();
+  },
+  showSearchDemo() {
+    state.editingMessageId = "";
+    state.messages = [
+      { id: "qa-search-user-1", role: "user", content: "올해 바뀐 회의실 예약 규정도 검색해 줘" },
+      {
+        id: "qa-search-assistant-1",
+        role: "assistant",
+        content: "올해 변경 사항은 공개된 자료에서 확인하지 못했어요. 사내 공지에서 직접 확인하는 것이 가장 정확해요.",
+        externalGrounding: true,
+        sourcesMissing: true
+      },
+      { id: "qa-search-user-2", role: "user", content: "그럼 기존 규정만 상황에 넣어 줘" },
+      {
+        id: "qa-search-assistant-2",
+        role: "assistant",
+        content: "앞에서 찾은 기존 규정을 상황 안내로 정리했어요. 아래에서 확인하고 [적용]을 누르면 반영돼요.",
+        externalGrounding: true,
+        sources: [{ title: "회의실 이용 안내", url: "https://example.com/rooms" }]
+      }
+    ];
+    state.pendingAction = {
+      token: "qa-pending-action",
+      name: "set_situation",
+      value: "회의실은 2시간 단위로 예약하고, 외부 손님이 있으면 하루 전에 신청한다."
+    };
+    renderMessages();
+    updateScreenContextUi();
+  },
+  showProgressDemo() {
+    state.pendingAction = null;
+    state.messages = [
+      { id: "qa-progress-user", role: "user", content: "회의 안내 메일 초안 고마워." },
+      { id: "qa-progress-assistant", role: "assistant", content: "필요하면 언제든 더 다듬어 드릴게요." }
+    ];
+    state.busy = true;
+    state.replying = true;
+    state.progress = {
+      startedAt: Date.now() - 14_000,
+      stage: "requesting",
+      searchPolicy: "required"
+    };
+    renderMessages({ pendingUser: "다음 주 공휴일 일정 찾아줘", typing: true });
+    updateScreenContextUi();
   },
   async resetAndProbe() {
     state.messages = [

@@ -36,6 +36,28 @@ class SideChatPolicyTest {
     }
 
     @Test
+    fun sourcesMissingFlagIsKeptOnlyForAssistantMessages() {
+        val trimmed = SideChatPolicy.trim(
+            listOf(
+                SideChatMessage("u", "user", "최신 규정 검색해줘", 1, sourcesMissing = true),
+                SideChatMessage(
+                    "a",
+                    "assistant",
+                    "확인하지 못했어요",
+                    2,
+                    untrustedExternalContext = true,
+                    sourcesMissing = true,
+                ),
+                SideChatMessage("a2", "assistant", "일반 답변", 3),
+            ),
+        )
+
+        assertFalse(trimmed[0].sourcesMissing)
+        assertTrue(trimmed[1].sourcesMissing)
+        assertFalse(trimmed[2].sourcesMissing)
+    }
+
+    @Test
     fun messagesAreSanitizedAndBoundedIndependentlyFromWritingHistory() {
         val messages = (0 until SideChatPolicy.MAX_MESSAGES + 5).map { index ->
             SideChatMessage(

@@ -57,7 +57,7 @@
           </button>
           <div class="visual-preview-meta">
             <strong id="visualPreviewTitle">이미지 준비됨</strong>
-            <span>다음 질문에서 검색에 사용</span>
+            <span>다음 질문에 함께 보내기</span>
           </div>
           <button id="cropVisualButton" class="visual-preview-action" type="button">영역 선택</button>
           <button id="clearScreenContextButton" class="visual-preview-remove" type="button" aria-label="이미지 사용 취소">×</button>
@@ -81,6 +81,16 @@
           >
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4zM7 15l3-3 2 2 2-2 3 3M9 9h.01" /></svg>
           </button>
+          <button
+            id="searchModeButton"
+            class="composer-tool-button"
+            type="button"
+            aria-pressed="false"
+            aria-label="다음 질문을 웹에서 검색"
+            title="다음 질문을 웹에서 검색"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13ZM15.3 15.3 20 20" /></svg>
+          </button>
           <label class="sr-only" for="chatInput">사이드 채팅 메시지</label>
           <textarea
             id="chatInput"
@@ -88,8 +98,9 @@
             maxlength="6000"
             placeholder="무엇이든 물어보세요."
           ></textarea>
-          <button id="sendChatButton" type="button" aria-label="메시지 보내기">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4.5 14-3.2-5.1L5 12Z" /></svg>
+          <button id="sendChatButton" type="button" data-mode="send" aria-label="메시지 보내기">
+            <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4.5 14-3.2-5.1L5 12Z" /></svg>
+            <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h8v8H8z" /></svg>
           </button>
         </div>
       </section>
