@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>글 강화기</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main id="app" class="app-shell" data-expanded="false" data-side="right">
+      <button id="edgeHandle" class="edge-handle drag-surface" type="button" aria-label="글 강화기 열기 또는 이동">
+        <span class="handle-grip" aria-hidden="true"></span>
+        <span class="handle-mark" aria-hidden="true">✦</span>
+        <span class="handle-label">글 강화기</span>
+        <span class="handle-arrow" aria-hidden="true">‹</span>
+      </button>
+
+      <section class="panel" aria-label="글 강화기">
+        <header class="panel-header">
+          <div id="panelDragHandle" class="brand drag-surface" title="드래그해서 창 이동">
+            <span class="brand-mark" aria-hidden="true">✦</span>
+            <span>글 강화기</span>
+            <span class="drag-dots" aria-hidden="true">•••</span>
+          </div>
+          <div class="header-actions">
+            <button id="chatButton" class="icon-button beta-tool-button" type="button" aria-label="사이드 채팅 베타 열기" title="사이드 채팅 베타">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 5h14v10H9l-4 4V5Z" />
+              </svg>
+              <span class="beta-tool-dot" aria-hidden="true">β</span>
+            </button>
+            <button id="historyButton" class="icon-button" type="button" aria-label="히스토리">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2" />
+              </svg>
+            </button>
+            <button id="newButton" class="icon-button is-hidden" type="button" aria-label="새 글">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 12a8 8 0 1 0 2.34-5.66M4 5v5h5" />
+              </svg>
+            </button>
+            <button id="settingsButton" class="icon-button" type="button" aria-label="설정 열기">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Zm7.4-3.2 2-1.56-2-3.46-2.49 1a7.7 7.7 0 0 0-2.52-1.46L13.6 2H9.7l-.39 3.06a7.7 7.7 0 0 0-2.52 1.46l-2.49-1-2 3.46 2 1.56a7 7 0 0 0 0 2.92l-2 1.56 2 3.46 2.49-1a7.7 7.7 0 0 0 2.52 1.46L9.7 22h3.9l.39-3.06a7.7 7.7 0 0 0 2.52-1.46l2.49 1 2-3.46-2-1.56a7 7 0 0 0 0-2.92Z" />
+              </svg>
+            </button>
+            <button id="collapseButton" class="icon-button" type="button" aria-label="접기">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+            </button>
+          </div>
+        </header>
+
+        <div class="panel-content">
+          <section id="inputView" class="view input-view">
+            <p class="input-kicker">아무렇게나 적어도 돼요.</p>
+            <div class="compact-toggle-row">
+              <button id="situationToggle" class="compact-toggle" type="button" aria-expanded="false" aria-controls="situationSection">＋ 상황</button>
+              <button id="toolsToggle" class="compact-toggle" type="button" aria-expanded="false" aria-controls="toolsSection">＋ 도구</button>
+            </div>
+
+            <div id="situationSection" class="compact-field is-hidden">
+              <label for="situationInput">어떤 상황인가요? <span>선택</span></label>
+              <div class="field-with-tool">
+                <textarea
+                  id="situationInput"
+                  rows="2"
+                  maxlength="2000"
+                  placeholder="예: 팀장에게 보낼 보고 · 소설 장면 · 고객 답장"
+                ></textarea>
+                <button class="field-tool voice-button" data-voice-target="situationInput" type="button" aria-label="상황 음성 입력">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3M9 22h6" /></svg>
+                </button>
+              </div>
+            </div>
+
+            <div class="source-wrap">
+              <label class="sr-only" for="sourceInput">다듬을 글</label>
+              <textarea
+                id="sourceInput"
+                class="source-input"
+                maxlength="12000"
+                placeholder="아무렇게나 적어도 돼요."
+                autofocus
+              ></textarea>
+            </div>
+
+            <div id="enhancementControlInput" class="enhancement-control">
+              <div class="enhancement-heading">
+                <strong id="enhancementLabelInput">강화 범위 · 3 원문 충실</strong>
+                <span id="enhancementTargetInput">목표 · 원문 글자 수의 약 90~110%</span>
+              </div>
+              <input id="enhancementLevelInput" type="range" min="1" max="5" step="1" value="3" aria-label="강화 범위 5단계" />
+              <div class="enhancement-ends"><span>요약·정리</span><span>보완·확장</span></div>
+            </div>
+
+            <div id="toolsSection" class="reference-bar tools-section is-hidden">
+              <div class="reference-actions">
+                <button id="attachButton" class="tool-button" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 17 7.5-7.5a3 3 0 0 0-4.2-4.2L4.8 12.8a5 5 0 0 0 7.1 7.1l7-7" /></svg>
+                  <span>파일</span>
+                </button>
+                <button id="captureButton" class="tool-button" type="button">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l1.5-2h5L16 7h4v12H4zM12 10a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" /></svg>
+                  <span>화면 촬영</span>
+                </button>
+                <button class="tool-button voice-button" data-voice-target="sourceInput" type="button" aria-label="글 음성 입력">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0 14 0M12 19v3M9 22h6" /></svg>
+                  <span>말하기</span>
+                </button>
+              </div>
+              <span id="attachmentLimit" class="reference-limit">최대 4개 · 전체 12MB</span>
+            </div>
+            <div id="attachmentList" class="attachment-list" aria-live="polite"></div>
+
+            <div class="input-actions">
+              <button id="guessButton" class="secondary-button" type="button">
+                <span>알아맞춰 봐</span>
+              </button>
+              <button id="enhanceButton" class="primary-button" type="button">
+                <span>완성하기</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+              </button>
+            </div>
+          </section>
+
+          <section id="guessView" class="view guess-view is-hidden">
+            <button id="guessBackButton" class="back-button" type="button">‹ 입력으로</button>
+            <div class="guess-card">
+              <div class="ai-avatar" aria-hidden="true">✦</div>
+              <div>
+                <span class="eyebrow">제가 먼저 알아볼게요</span>
+                <p id="guessAssumption" class="guess-assumption"></p>
+                <p id="guessQuestion" class="guess-question"></p>
+              </div>
+            </div>
+            <div class="answer-wrap">
+              <label for="guessAnswer">대충 답해도 돼요</label>
+              <textarea id="guessAnswer" maxlength="2000" rows="3" placeholder="모르면 비워 둬도 괜찮아요"></textarea>
+              <button class="floating-mic voice-button" data-voice-target="guessAnswer" type="button" aria-label="답변 음성 입력">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3M9 22h6" /></svg>
+              </button>
+            </div>
+            <button id="guessCompleteButton" class="primary-button" type="button">
+              <span>답하고 완성</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+            <button id="guessAutoButton" class="wide-text-button" type="button">모르겠어요 · 알아서 완성</button>
+          </section>
+
+          <section id="resultView" class="view result-view is-hidden">
+            <div class="result-label">
+              <span>완성된 글</span>
+              <div class="version-actions">
+                <span id="versionLabel">1번째 결과</span>
+                <button id="undoButton" class="mini-button" type="button" disabled>이전</button>
+                <button id="nextButton" class="mini-button" type="button" disabled>다음</button>
+                <button id="reenhanceButton" class="mini-button accent" type="button">다시 강화</button>
+              </div>
+            </div>
+            <label class="sr-only" for="completedText">완성된 글</label>
+            <textarea id="completedText" class="completed-text" spellcheck="true"></textarea>
+            <button id="rawOriginalToggle" class="raw-original-toggle" type="button" aria-expanded="false" aria-controls="rawOriginalPanel">원문 보기</button>
+            <div id="rawOriginalPanel" class="raw-original-panel is-hidden">
+              <span>처음 입력한 원문</span>
+              <p id="rawOriginalText"></p>
+            </div>
+            <div id="enhancementControlResult" class="enhancement-control result-enhancement-control">
+              <div class="enhancement-heading">
+                <strong id="enhancementLabelResult">강화 범위 · 3 원문 충실</strong>
+                <span id="enhancementTargetResult">목표 · 원문 글자 수의 약 90~110%</span>
+              </div>
+              <input id="enhancementLevelResult" type="range" min="1" max="5" step="1" value="3" aria-label="다시 강화할 범위 5단계" />
+              <div class="enhancement-ends"><span>요약·정리</span><span>보완·확장</span></div>
+            </div>
+            <button id="applyButton" class="primary-button apply-button" type="button">
+              <span>강화한 글 복사</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8h11v11H8zM5 16H4V5h11v1" /></svg>
+            </button>
+
+            <div class="follow-up">
+              <div class="ai-avatar" aria-hidden="true">✦</div>
+              <p id="followUpText" class="follow-up-text"></p>
+            </div>
+            <div class="reply-row">
+              <label class="sr-only" for="replyInput">AI에게 답하기</label>
+              <textarea id="replyInput" class="reply-input auto-grow" rows="2" maxlength="2000" placeholder="아니면 다른 요구 사항 입력"></textarea>
+              <button class="voice-button reply-mic" data-voice-target="replyInput" type="button" aria-label="답변 음성 입력">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3M9 22h6" /></svg>
+              </button>
+              <button id="replyButton" class="send-button" type="button" aria-label="답 보내기">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 12 12-7-4 14-3-5-5-2Z" /></svg>
+              </button>
+              <button id="autoButton" class="auto-button" type="button">알아서</button>
+            </div>
+          </section>
+
+          <section id="loadingView" class="view loading-view is-hidden" aria-live="polite">
+            <div class="thinking-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+            <p id="loadingText">가장 자연스러운 글로 만들고 있어요</p>
+          </section>
+        </div>
+
+        <aside id="historyPopup" class="overlay-popup is-hidden" aria-label="글 강화 히스토리">
+          <div class="popup-header">
+            <div id="historyPopupDragHandle" class="popup-title drag-surface" title="드래그해서 창 이동"><h2>이전 작업</h2><p>필요한 글만 다시 열어 보세요</p></div>
+            <button id="historyCloseButton" class="icon-button" type="button" aria-label="히스토리 닫기">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+          <div id="historyList" class="history-list"></div>
+          <p id="historyEmpty" class="empty-state is-hidden">아직 완성한 글이 없어요.</p>
+        </aside>
+
+        <aside id="settingsPopup" class="overlay-popup is-hidden" aria-label="설정">
+          <div class="popup-header">
+            <div id="settingsPopupDragHandle" class="popup-title drag-surface" title="드래그해서 창 이동"><h2>설정</h2><p>평소엔 숨겨 두는 조절 항목이에요</p></div>
+            <button id="settingsCloseButton" class="icon-button" type="button" aria-label="설정 닫기">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+
+          <form id="settingsForm">
+            <div class="settings-section">
+              <h3>화면 <small>바꾸는 즉시 저장</small></h3>
+              <label class="field-label" for="windowMode">창 이동 방식</label>
+              <select id="windowMode" class="settings-input">
+                <option value="docked">화면 가장자리에 고정</option>
+                <option value="free">원하는 위치에 자유 이동</option>
+              </select>
+
+              <label class="range-label" for="opacityInput"><span>투명도</span><output id="opacityValue">98%</output></label>
+              <input id="opacityInput" class="range-input" type="range" min="55" max="100" step="1" value="98" />
+
+              <label class="range-label" for="fontScaleInput"><span>글자 크기</span><output id="fontScaleValue">100%</output></label>
+              <input id="fontScaleInput" class="range-input" type="range" min="85" max="130" step="5" value="100" />
+
+              <div class="size-grid">
+                <div>
+                  <label class="field-label" for="windowWidthInput">창 너비</label>
+                  <input id="windowWidthInput" class="settings-input" type="number" min="380" max="680" step="20" />
+                </div>
+                <div>
+                  <label class="field-label" for="windowHeightInput">창 높이</label>
+                  <input id="windowHeightInput" class="settings-input" type="number" min="560" max="920" step="20" />
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>AI 연결</h3>
+              <label class="field-label" for="openaiKey">OpenAI API 키</label>
+              <div class="secret-row">
+                <input id="openaiKey" class="settings-input" type="password" autocomplete="off" placeholder="sk-..." />
+                <span id="openaiStatus" class="key-status"></span>
+              </div>
+              <label class="field-label" for="geminiKey">Gemini API 키</label>
+              <div class="secret-row">
+                <input id="geminiKey" class="settings-input" type="password" autocomplete="off" placeholder="AIza..." />
+                <span id="geminiStatus" class="key-status"></span>
+              </div>
+              <label class="field-label" for="shortcutInput">열기 단축키</label>
+              <input id="shortcutInput" class="settings-input" type="text" autocomplete="off" placeholder="CommandOrControl+Shift+Space" />
+              <p class="privacy-note">API 키는 Windows 보안 저장소로 암호화됩니다.</p>
+            </div>
+
+            <div class="memory-setting">
+              <div><span>기억 추가 비활성화</span><small id="memoryCount">0개 저장됨 · 기존 기억은 유지</small></div>
+              <label class="memory-switch">
+                <input id="memoryAdditionsDisabled" type="checkbox" />
+                <span class="switch-track" aria-hidden="true"><span></span></span>
+                <span class="switch-label">끄기</span>
+              </label>
+            </div>
+            <button id="manageMemoryButton" class="outline-button" type="button">저장된 기억 확인·수정</button>
+            <p id="settingsError" class="settings-error" role="alert"></p>
+            <button class="settings-save-button" type="submit">저장</button>
+          </form>
+        </aside>
+
+        <aside id="memoryPopup" class="overlay-popup is-hidden" aria-label="저장된 기억 관리">
+          <div class="popup-header">
+            <div id="memoryPopupDragHandle" class="popup-title drag-surface" title="드래그해서 창 이동"><h2>저장된 기억</h2><p>잘못 이해한 내용은 바로 고칠 수 있어요</p></div>
+            <button id="memoryCloseButton" class="icon-button" type="button" aria-label="기억 관리 닫기">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+            </button>
+          </div>
+          <div id="memoryList" class="memory-list"></div>
+          <p id="memoryEmpty" class="empty-state is-hidden">저장된 기억이 없어요.</p>
+          <button id="clearMemoryButton" class="danger-outline-button" type="button">모든 기억 지우기</button>
+        </aside>
+
+        <aside id="memoryApproval" class="memory-approval is-hidden" aria-label="기억 추가 확인">
+          <div>
+            <strong>다음 글에도 이 방식을 기억할까요?</strong>
+            <ul id="memoryCandidateList"></ul>
+          </div>
+          <div class="memory-approval-actions">
+            <button id="memoryRejectButton" type="button">추가 안 함</button>
+            <button id="memoryApproveButton" type="button">기억에 추가</button>
+          </div>
+        </aside>
+
+        <div id="toast" class="toast is-hidden" role="status">
+          <span id="toastText"></span>
+          <button id="toastAction" class="toast-action is-hidden" type="button">취소</button>
+        </div>
+        <div id="resizeHandle" class="resize-handle" role="separator" aria-label="글 강화기 창 크기 조절" title="드래그해서 창 크기 조절">↘</div>
+      </section>
+    </main>
+    <script src="./enhancement-levels.js"></script>
+    <script src="./version-navigation.js"></script>
+    <script src="./renderer.js"></script>
+  </body>
+</html>

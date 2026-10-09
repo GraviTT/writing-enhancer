@@ -1,0 +1,31 @@
+# JavaScript
+node_modules/
+dist/
+coverage/
+*.log
+
+# Android / Gradle
+.gradle/
+build/
+**/build/
+local.properties
+*.apk
+*.aab
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets and local runtime data
+.env
+.env.*
+!.env.example
+*.local.json
+secrets/
+
+
+# Kotlin compiler caches and loose build archives
+.kotlin/
+android/*.zip

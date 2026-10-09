@@ -1,0 +1,43 @@
+{
+  "name": "writing-enhancer-desktop",
+  "version": "0.4.2",
+  "description": "생각나는 대로 쓰면 전달할 수 있는 글로 완성해 주는 Windows 데스크톱 앱",
+  "main": "src/main.js",
+  "author": "Writing Enhancer",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/run-electron.js .",
+    "test": "node --test",
+    "screenshot": "node scripts/run-electron.js . --qa-capture",
+    "pack": "electron-builder --win dir",
+    "dist": "node scripts/build-policy-portable.js",
+    "dist:builder": "node scripts/build-portable.js",
+    "dist:policy": "node scripts/build-policy-portable.js",
+    "smoke": "node scripts/smoke-portable.js"
+  },
+  "devDependencies": {
+    "electron": "37.2.6",
+    "electron-builder": "26.0.12"
+  },
+  "build": {
+    "appId": "com.writingenhancer.desktop",
+    "productName": "글 강화기",
+    "artifactName": "Writing-Enhancer-${version}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ]
+    }
+  }
+}

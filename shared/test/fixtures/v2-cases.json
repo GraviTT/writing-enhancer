@@ -1,0 +1,130 @@
+{
+  "writing_request": {
+    "schema_version": 2,
+    "mode": "enhance",
+    "input": "이 내용 바탕으로 거래처에 일정 변경 문자 만들어줘",
+    "context_note": "오래 거래한 협력사 담당자에게 보내는 업무 문자",
+    "attachments": [
+      {
+        "id": "att_schedule",
+        "kind": "file",
+        "name": "일정 메모.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 128,
+        "sha256": null,
+        "extracted_text": "기존 일정: 7월 30일\n변경 희망 일정: 8월 2일",
+        "data_base64": null
+      },
+      {
+        "id": "att_screen",
+        "kind": "screenshot",
+        "name": "현재 화면.png",
+        "mime_type": "image/png",
+        "size_bytes": 8,
+        "sha256": null,
+        "extracted_text": "프로젝트 일정 화면",
+        "data_base64": "iVBORw0KGgo="
+      }
+    ],
+    "feedback": null,
+    "previous_completed_text": null
+  },
+  "guess_first_output": {
+    "question": "이 글을 가장 먼저 읽을 사람은 누구인가요?",
+    "recommended_answer": "오래 거래한 협력사 담당자가 읽는 것으로 진행합니다.",
+    "assumption": "업무 관계를 유지하면서 일정 변경을 분명히 전달하려는 상황으로 보입니다.",
+    "memory_candidates": []
+  },
+  "history_entry": {
+    "schema_version": 2,
+    "id": "history_001",
+    "title": "협력사 일정 변경 문자",
+    "mode": "enhance",
+    "source_input": "이 내용 바탕으로 거래처에 일정 변경 문자 만들어줘",
+    "context_note": "오래 거래한 협력사 담당자에게 보내는 업무 문자",
+    "attachments": [
+      {
+        "id": "att_schedule",
+        "kind": "file",
+        "name": "일정 메모.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 128,
+        "sha256": null
+      },
+      {
+        "id": "att_screen",
+        "kind": "screenshot",
+        "name": "현재 화면.png",
+        "mime_type": "image/png",
+        "size_bytes": 8,
+        "sha256": null
+      }
+    ],
+    "versions": [
+      {
+        "id": "version_001",
+        "sequence": 1,
+        "source": "initial",
+        "completed_text": "안녕하세요. 기존 7월 30일 일정을 8월 2일로 조정하고자 합니다.",
+        "assumption": "협력사에 정중하고 분명하게 일정 변경을 요청하는 상황으로 이해했습니다.",
+        "follow_up": "변경 이유는 짧게 덧붙이는 편을 추천해요. 이유도 넣을까요?",
+        "created_at": "2026-07-28T12:00:00.000Z"
+      },
+      {
+        "id": "version_002",
+        "sequence": 2,
+        "source": "regenerate",
+        "completed_text": "안녕하세요. 프로젝트 일정을 7월 30일에서 8월 2일로 변경 요청드립니다. 확인 부탁드립니다.",
+        "assumption": "변경 전후 날짜가 한눈에 보이도록 다시 구성했습니다.",
+        "follow_up": "이 문구가 더 명확해 보여요. 조금 더 부드럽게 바꿀까요?",
+        "created_at": "2026-07-28T12:02:00.000Z"
+      }
+    ],
+    "active_version_id": "version_002",
+    "created_at": "2026-07-28T12:00:00.000Z",
+    "updated_at": "2026-07-28T12:02:00.000Z"
+  },
+  "draft": {
+    "schema_version": 2,
+    "id": "draft_001",
+    "mode": "enhance",
+    "input": "거래처 일정이 바뀌었는데",
+    "context_note": "협력사 담당자에게 보낼 문자",
+    "attachments": [
+      {
+        "id": "att_schedule",
+        "kind": "file",
+        "name": "일정 메모.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 128,
+        "sha256": null
+      }
+    ],
+    "feedback": null,
+    "previous_completed_text": null,
+    "history_entry_id": null,
+    "pending_guess": null,
+    "created_at": "2026-07-28T11:58:00.000Z",
+    "updated_at": "2026-07-28T11:59:00.000Z"
+  },
+  "memory_edits": {
+    "update": {
+      "schema_version": 2,
+      "operation": "update",
+      "memory_id": "memory_001",
+      "changes": {
+        "value": "협력사 문자에서는 변경 전후 일정을 한 문장에 함께 적는다.",
+        "scope": "협력사 일정 변경",
+        "keywords": ["협력사", "일정 변경"],
+        "retention": "long_term"
+      },
+      "edited_at": "2026-07-28T12:05:00.000Z"
+    },
+    "delete": {
+      "schema_version": 2,
+      "operation": "delete",
+      "memory_id": "memory_002",
+      "edited_at": "2026-07-28T12:06:00.000Z"
+    }
+  }
+}
