@@ -190,6 +190,9 @@ test("알림은 버전마다 한 번이고, 누르면 받아서 설치 스크립
     assert.match(script, /Expand-Archive -LiteralPath \$Zip/u);
     assert.match(script, /resources\\app\\package\.json/u);
     assert.match(script, /Start-Process -FilePath \$Exe/u);
+    // PowerShell 5.1은 BOM 없는 스크립트를 시스템 코드 페이지로 읽으므로 ASCII만 쓰고, 진행 표시는 끈다.
+    assert.ok([...script].every((char) => char.charCodeAt(0) < 128), "설치 스크립트는 ASCII만 써야 한다");
+    assert.match(script, /\$ProgressPreference = 'SilentlyContinue'/u);
   }));
 
 test("개발 실행처럼 업데이트할 수 없는 곳에서는 확인하지 않고 이유를 알린다", async () => {

@@ -139,6 +139,8 @@ const INSTALL_SCRIPT = `param(
   [string]$Log
 )
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1 renders progress bars very slowly for large archives.
+$ProgressPreference = 'SilentlyContinue'
 function Write-Log([string]$Message) {
   Add-Content -LiteralPath $Log -Value ('[{0}] {1}' -f (Get-Date -Format s), $Message) -Encoding UTF8
 }
