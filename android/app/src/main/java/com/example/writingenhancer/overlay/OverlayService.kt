@@ -29,6 +29,7 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ActionMode
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowManager
@@ -72,6 +73,7 @@ import com.example.writingenhancer.ui.InlineEditMenuController
 import com.example.writingenhancer.ui.MobileEditorRole
 import com.example.writingenhancer.ui.MobileLayoutProfile
 import com.example.writingenhancer.ui.MobileUiPolicy
+import com.example.writingenhancer.ui.OverlayTextActionMode
 import com.example.writingenhancer.ui.PanelNavigationAction
 import com.example.writingenhancer.ui.PanelScreenState
 import com.example.writingenhancer.ui.PanelSurface
@@ -3294,6 +3296,28 @@ private class BackAwareFrameLayout(
     private val onOutside: (MotionEvent) -> Unit,
 ) : FrameLayout(context) {
     var outsideEnabled: () -> Boolean = { true }
+    private var textActionMode: OverlayTextActionMode? = null
+
+    // 오버레이 창에는 Android 기본 선택 메뉴를 띄울 바깥 틀이 없어, 길게 눌러 선택하면 여기서 대신 띄운다.
+    override fun startActionModeForChild(
+        originalView: View,
+        callback: ActionMode.Callback,
+        type: Int,
+    ): ActionMode? {
+        if (type != ActionMode.TYPE_FLOATING) return super.startActionModeForChild(originalView, callback, type)
+        textActionMode?.finish()
+        val mode = OverlayTextActionMode(this, originalView, callback) { finished ->
+            if (textActionMode === finished) textActionMode = null
+        }
+        return if (mode.start()) mode.also { textActionMode = it } else null
+    }
+
+    // 뒤로 가기는 먼저 선택 메뉴를 닫는다.
+    private fun finishTextActionMode(): Boolean {
+        val mode = textActionMode ?: return false
+        mode.finish()
+        return true
+    }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_OUTSIDE && outsideEnabled()) {
@@ -3305,7 +3329,7 @@ private class BackAwareFrameLayout(
 
     override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-            onBack()
+            if (!finishTextActionMode()) onBack()
             return true
         }
         return super.dispatchKeyEventPreIme(event)
@@ -3313,7 +3337,7 @@ private class BackAwareFrameLayout(
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
-            onBack()
+            if (!finishTextActionMode()) onBack()
             return true
         }
         return super.dispatchKeyEvent(event)
