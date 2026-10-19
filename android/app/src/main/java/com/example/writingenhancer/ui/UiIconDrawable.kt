@@ -7,7 +7,7 @@ import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.drawable.Drawable
 
-enum class UiIcon { HISTORY, CHAT, SETTINGS, CLOSE, NEW, COPY, EDIT, BACK, NEXT, RESIZE }
+enum class UiIcon { HISTORY, CHAT, SETTINGS, CLOSE, NEW_CHAT, COPY, EDIT, BACK, NEXT, RESIZE }
 
 /** Small, consistent native line icons; no font/emoji substitution across Android devices. */
 class UiIconDrawable(private val icon: UiIcon, color: Int) : Drawable() {
@@ -34,7 +34,12 @@ class UiIconDrawable(private val icon: UiIcon, color: Int) : Drawable() {
             UiIcon.CLOSE -> { line(6f, 6f, 18f, 18f); line(18f, 6f, 6f, 18f) }
             UiIcon.BACK -> line(14f, 5f, 7f, 12f, 14f, 19f)
             UiIcon.NEXT -> line(10f, 5f, 17f, 12f, 10f, 19f)
-            UiIcon.NEW -> { line(12f, 5f, 12f, 19f); line(5f, 12f, 19f, 12f) }
+            // 말풍선 안에 +를 넣어 "새 글"이 아니라 "새 채팅"임을 보여 준다.
+            UiIcon.NEW_CHAT -> {
+                line(5f, 4f, 19f, 4f, 21f, 6f, 21f, 16f, 19f, 18f,
+                    9f, 18f, 4f, 21f, 4f, 18f, 3f, 16f, 3f, 6f, 5f, 4f)
+                line(12f, 7.5f, 12f, 14.5f); line(8.5f, 11f, 15.5f, 11f)
+            }
             UiIcon.CHAT -> {
                 line(5f, 4f, 19f, 4f, 21f, 6f, 21f, 16f, 19f, 18f,
                     9f, 18f, 4f, 21f, 4f, 18f, 3f, 16f, 3f, 6f, 5f, 4f)

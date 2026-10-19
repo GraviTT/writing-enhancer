@@ -29,34 +29,48 @@
           </div>
           <div class="header-actions">
             <button id="updateButton" class="update-button is-hidden" type="button" aria-live="polite">업데이트</button>
-            <button id="chatButton" class="icon-button beta-tool-button" type="button" aria-label="사이드 채팅 베타 열기" title="사이드 채팅 베타" aria-pressed="false">
+            <button id="chatButton" class="icon-button labeled beta-tool-button" type="button" aria-label="사이드 채팅 베타 열기" title="사이드 채팅 열기 · AI와 대화하며 글을 고쳐요" aria-pressed="false">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M5 5h14v10H9l-4 4V5Z" />
+                <path d="M5 5h14v10H9l-4 4V5ZM8.5 9h7M8.5 12h4.5" />
               </svg>
+              <span class="icon-caption" aria-hidden="true">채팅</span>
               <span class="beta-tool-dot" aria-hidden="true">β</span>
             </button>
-            <button id="historyButton" class="icon-button" type="button" aria-label="히스토리">
+            <button id="historyButton" class="icon-button labeled" type="button" aria-label="이전 작업 기록" title="이전 작업 기록 · 예전에 강화한 글을 다시 열어요">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5M12 7v5l3 2" />
               </svg>
+              <span class="icon-caption" aria-hidden="true">기록</span>
             </button>
-            <button id="newButton" class="icon-button is-hidden" type="button" aria-label="새 글">
+            <button id="newButton" class="icon-button labeled is-hidden" type="button" aria-label="새 글 쓰기" title="새 글 쓰기 · 지금 글은 기록에 남기고 빈 입력칸을 열어요">
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M4 12a8 8 0 1 0 2.34-5.66M4 5v5h5" />
+                <path d="M13.5 3.5H6.5a1.5 1.5 0 0 0-1.5 1.5v14a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V9ZM13.5 3.5V9H19M12 11.5v6M9 14.5h6" />
               </svg>
+              <span class="icon-caption" aria-hidden="true">새 글</span>
             </button>
-            <button id="settingsButton" class="icon-button" type="button" aria-label="설정 열기">
+            <button id="settingsButton" class="icon-button labeled" type="button" aria-label="설정 열기" title="설정 · API 키, 단축키, 화면">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M12 15.2A3.2 3.2 0 1 0 12 8.8a3.2 3.2 0 0 0 0 6.4Zm7.4-3.2 2-1.56-2-3.46-2.49 1a7.7 7.7 0 0 0-2.52-1.46L13.6 2H9.7l-.39 3.06a7.7 7.7 0 0 0-2.52 1.46l-2.49-1-2 3.46 2 1.56a7 7 0 0 0 0 2.92l-2 1.56 2 3.46 2.49-1a7.7 7.7 0 0 0 2.52 1.46L9.7 22h3.9l.39-3.06a7.7 7.7 0 0 0 2.52-1.46l2.49 1 2-3.46-2-1.56a7 7 0 0 0 0-2.92Z" />
               </svg>
+              <span class="icon-caption" aria-hidden="true">설정</span>
             </button>
-            <button id="collapseButton" class="icon-button" type="button" aria-label="접기">
+            <button id="collapseButton" class="icon-button labeled" type="button" aria-label="화면 가장자리로 접기" title="접기 · 화면 가장자리 손잡이로 줄여요">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6" /></svg>
+              <span class="icon-caption" aria-hidden="true">접기</span>
             </button>
           </div>
         </header>
 
         <div class="panel-content">
+          <div id="copyOffer" class="copy-offer is-hidden" role="status">
+            <div class="copy-offer-text">
+              <strong>방금 복사한 글을 강화할까요?</strong>
+              <span id="copyOfferPreview"></span>
+            </div>
+            <button id="copyOfferUse" class="copy-offer-use" type="button">강화하기</button>
+            <button id="copyOfferDismiss" class="copy-offer-close" type="button" aria-label="복사한 글 강화 제안 닫기" title="닫기">×</button>
+          </div>
+
           <section id="inputView" class="view input-view">
             <p class="input-kicker">아무렇게나 적어도 돼요.</p>
             <div class="compact-toggle-row">
@@ -200,6 +214,53 @@
             </div>
           </section>
 
+          <section id="selectionView" class="view selection-view is-hidden" aria-label="선택한 글 강화">
+            <div class="selection-head">
+              <button id="selectionBackButton" class="back-button" type="button" title="선택한 글 강화를 닫고 원래 화면으로 돌아가요">‹ 돌아가기</button>
+              <span class="selection-title">선택한 글 강화</span>
+            </div>
+            <div class="selection-original">
+              <span id="selectionSource" class="selection-source"></span>
+              <p id="selectionOriginal" class="selection-original-text"></p>
+              <button id="selectionOriginalToggle" class="raw-original-toggle is-hidden" type="button" aria-expanded="false">전체 보기</button>
+            </div>
+
+            <div id="selectionOptions" class="selection-options">
+              <div class="selection-field-title">강화 단계</div>
+              <div id="selectionLevels" class="level-segments" role="radiogroup" aria-label="강화 단계"></div>
+              <p id="selectionLevelHint" class="selection-hint"></p>
+              <div class="selection-field-title">상황 <span>고르거나 직접 써도 돼요 · 선택</span></div>
+              <div id="selectionSituations" class="situation-chips" role="group" aria-label="자주 쓰는 상황"></div>
+              <textarea id="selectionSituationInput" class="selection-situation-input" rows="2" maxlength="2000" placeholder="직접 입력 · 예: 친구에게 보내는 생일 축하"></textarea>
+              <button id="selectionEnhanceButton" class="primary-button" type="button">
+                <span>강화하기</span>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
+              </button>
+            </div>
+
+            <div id="selectionLoading" class="selection-loading is-hidden" aria-live="polite">
+              <div class="thinking-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+              <p>선택한 글을 강화하고 있어요</p>
+            </div>
+
+            <div id="selectionResult" class="selection-result is-hidden">
+              <div class="selection-result-head">
+                <span id="selectionSummary"></span>
+                <button id="selectionEditButton" class="mini-button" type="button" title="강화 단계나 상황을 바꿔 다시 강화해요">조건 바꾸기</button>
+              </div>
+              <label class="sr-only" for="selectionResultText">강화한 글</label>
+              <textarea id="selectionResultText" class="completed-text selection-result-text" spellcheck="true"></textarea>
+              <div class="selection-actions">
+                <button id="selectionReplaceButton" class="primary-button" type="button"><span>바꿔 넣기</span></button>
+                <button id="selectionCopyButton" class="secondary-button" type="button"><span>복사</span></button>
+              </div>
+              <div class="selection-secondary">
+                <button id="selectionAgainButton" class="mini-button accent" type="button">다시 강화</button>
+                <button id="selectionOpenButton" class="mini-button" type="button" title="이 결과를 글 강화기 화면에서 이어서 다듬어요">글 강화기에서 이어 쓰기</button>
+              </div>
+            </div>
+          </section>
+
           <section id="loadingView" class="view loading-view is-hidden" aria-live="polite">
             <div class="thinking-mark" aria-hidden="true"><span></span><span></span><span></span></div>
             <p id="loadingText">가장 자연스러운 글로 만들고 있어요</p>
@@ -208,7 +269,7 @@
 
         <section id="chatSurface" class="chat-surface is-hidden" aria-label="사이드 채팅">
           <div class="chat-toolbar">
-            <button id="openWritingButton" class="text-icon-button" type="button" aria-label="글 강화기로 전환" title="글 강화기로 전환">‹ 글로</button>
+            <button id="openWritingButton" class="text-icon-button" type="button" aria-label="글 강화기 화면으로 돌아가기" title="글 강화기 화면으로 돌아가기">‹ 글 강화</button>
             <div class="chat-toolbar-title">
               <div class="chat-title-row">
                 <strong>사이드 채팅</strong>
@@ -216,8 +277,9 @@
               </div>
               <small>현재 글과 기능이 연결된 대화</small>
             </div>
-            <button id="newChatButton" class="icon-button" type="button" aria-label="새 채팅" title="새 채팅">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.34-5.66M4 5v5h5" /></svg>
+            <button id="newChatButton" class="icon-button labeled" type="button" aria-label="새 채팅 시작" title="새 채팅 · 지금 대화를 지우고 새로 시작해요 (쓰던 글은 그대로)">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H9l-4 4V5ZM12 7.5v5M9.5 10h5" /></svg>
+              <span class="icon-caption" aria-hidden="true">새 채팅</span>
             </button>
           </div>
 
@@ -388,9 +450,20 @@
                 <input id="geminiKey" class="settings-input" type="password" autocomplete="off" placeholder="AIza..." />
                 <span id="geminiStatus" class="key-status"></span>
               </div>
-              <label class="field-label" for="shortcutInput">열기 단축키</label>
-              <input id="shortcutInput" class="settings-input" type="text" autocomplete="off" placeholder="CommandOrControl+Shift+Space" />
               <p class="privacy-note">API 키는 Windows 보안 저장소로 암호화됩니다.</p>
+            </div>
+
+            <div class="settings-section">
+              <h3>단축키와 선택한 글</h3>
+              <label class="field-label" for="shortcutInput">창 열기 단축키</label>
+              <input id="shortcutInput" class="settings-input" type="text" autocomplete="off" placeholder="CommandOrControl+Shift+Space" />
+              <label class="field-label" for="selectionShortcutInput">선택한 글 강화 단축키</label>
+              <input id="selectionShortcutInput" class="settings-input" type="text" autocomplete="off" placeholder="CommandOrControl+Shift+G" />
+              <p class="privacy-note">다른 프로그램에서 글을 드래그해 선택하고 이 단축키를 누르면 바로 강화해요. 결과는 원래 자리에 바꿔 넣을 수 있어요.</p>
+              <label class="check-row" for="copyOfferInput">
+                <input id="copyOfferInput" type="checkbox" />
+                <span>창을 열 때 방금 복사한 글 강화 제안<small>오른쪽 클릭 메뉴로 복사한 뒤 손잡이를 눌러도 강화할 수 있어요</small></span>
+              </label>
             </div>
 
             <div class="memory-setting">
@@ -441,9 +514,11 @@
     <script src="./version-navigation.js"></script>
     <script src="./visual-crop.js"></script>
     <script src="./side-chat-rules.js"></script>
+    <script src="./writing-rules.js"></script>
     <script src="./side-chat-text.js"></script>
     <script src="./chat-answer.js"></script>
     <script src="./renderer.js"></script>
     <script src="./side-chat.js"></script>
+    <script src="./selection.js"></script>
   </body>
 </html>

@@ -27,6 +27,15 @@ class AiPromptBuilderTest {
     }
 
     @Test
+    fun enhancementAndChatFollowTheUsersSpeechLevel() {
+        assertTrue(AiClient.SYSTEM_INSTRUCTIONS.endsWith("\n\n" + SharedWritingRules.ENHANCE_SPEECH_LEVEL))
+        assertTrue(SharedWritingRules.ENHANCE_SPEECH_LEVEL.contains("원문이 반말이면 반말로, 존댓말이면 존댓말로"))
+        assertTrue(SharedSideChatRules.SYSTEM_PROMPT.contains("사용자가 반말로 말하면 반말로, 존댓말로 말하면 존댓말로"))
+        assertEquals(5, SharedWritingRules.LEVEL_SHORT_LABELS.size)
+        assertTrue(SharedWritingRules.SITUATIONS.all { it.label.length <= 6 && it.text.isNotBlank() })
+    }
+
+    @Test
     fun guessAnswerKeepsTheQuestionAndAssumptionItAnswers() {
         val payload = AiPromptBuilder.build(
             EnhancementRequest(

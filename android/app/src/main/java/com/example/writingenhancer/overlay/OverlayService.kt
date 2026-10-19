@@ -1302,10 +1302,13 @@ class OverlayService : Service() {
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
             if (showHistory) {
-                header.addView(Ui.iconButton(this@OverlayService, UiIcon.HISTORY, "기록") { renderHistory() }, LinearLayout.LayoutParams(dp(44), dp(44)))
                 header.addView(
-                    Ui.iconButton(this@OverlayService, UiIcon.CHAT, "사이드 채팅 베타 열기") { openSideChat() },
-                    LinearLayout.LayoutParams(dp(44), dp(44)),
+                    Ui.labeledIconButton(this@OverlayService, UiIcon.HISTORY, "기록", "이전 작업 기록 열기") { renderHistory() },
+                    LinearLayout.LayoutParams(dp(46), dp(52)),
+                )
+                header.addView(
+                    Ui.labeledIconButton(this@OverlayService, UiIcon.CHAT, "채팅", "사이드 채팅 베타 열기") { openSideChat() },
+                    LinearLayout.LayoutParams(dp(46), dp(52)),
                 )
             }
             if (showNew) {
@@ -1320,11 +1323,14 @@ class OverlayService : Service() {
                     setTextColor(Ui.PANEL_MUTED)
                 }, LinearLayout.LayoutParams(dp(88), dp(44)).apply { gravity = Gravity.END })
             }
-            val gear = Ui.iconButton(this@OverlayService, UiIcon.SETTINGS, "설정") {
+            val gear = Ui.labeledIconButton(this@OverlayService, UiIcon.SETTINGS, "설정", "설정 열기") {
                 openSettings(it)
             }
-            header.addView(gear, LinearLayout.LayoutParams(dp(44), dp(44)))
-            header.addView(Ui.iconButton(this@OverlayService, UiIcon.CLOSE, "버블로 접기") { close() }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            header.addView(gear, LinearLayout.LayoutParams(dp(46), dp(52)))
+            header.addView(
+                Ui.labeledIconButton(this@OverlayService, UiIcon.CLOSE, "접기", "버블로 접기") { close() },
+                LinearLayout.LayoutParams(dp(46), dp(52)),
+            )
             header.setOnTouchListener(
                 WindowDragTouchListener(
                     view = header,

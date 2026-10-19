@@ -1495,3 +1495,356 @@ textarea {
 .update-button.is-error {
   background: #b5485a;
 }
+
+/* 아이콘 아래에 짧은 이름을 붙여, 비슷해 보이는 버튼(새 글·새 채팅·기록)을 구분한다. */
+.icon-button.labeled {
+  width: 38px;
+  height: 42px;
+  grid-template-rows: 18px auto;
+  align-content: center;
+  gap: 2px;
+}
+
+.icon-button.labeled .icon-caption {
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.icon-button.labeled .beta-tool-dot {
+  top: 2px;
+  right: 3px;
+}
+
+.brand > span:not(.brand-mark):not(.drag-dots) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 420px) {
+  .drag-dots {
+    display: none;
+  }
+}
+
+/* 방금 복사한 글 강화 제안 */
+.copy-offer {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 9px;
+  padding: 9px 8px 9px 12px;
+  border: 1px solid rgba(105, 87, 244, 0.2);
+  border-radius: 14px;
+  background: var(--purple-soft);
+}
+
+.copy-offer-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.copy-offer-text strong {
+  color: var(--purple-dark);
+  font-size: 11px;
+}
+
+.copy-offer-text span {
+  overflow: hidden;
+  color: #6a6280;
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.copy-offer-use {
+  height: 30px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--purple);
+  color: white;
+  font-size: 11px;
+  font-weight: 740;
+}
+
+.copy-offer-close {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #7a7390;
+  font-size: 15px;
+}
+
+.copy-offer-use:focus-visible,
+.copy-offer-close:focus-visible,
+.level-segment:focus-visible,
+.situation-chip:focus-visible {
+  outline: 3px solid rgba(105, 87, 244, 0.22);
+  outline-offset: 1px;
+}
+
+/* 선택한 글 강화 화면 */
+.selection-view {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.selection-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.selection-title {
+  color: var(--purple-dark);
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.selection-original {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 10px;
+  padding: 9px 11px;
+  border: 1px dashed #d8d3e3;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.selection-source {
+  color: #8a839b;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.selection-original-text {
+  max-height: 150px;
+  margin: 4px 0 0;
+  overflow-y: auto;
+  color: #514b5f;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.selection-options,
+.selection-result {
+  display: flex;
+  flex-direction: column;
+}
+
+.selection-field-title {
+  margin: 4px 2px 6px;
+  color: #5f5871;
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.selection-field-title span {
+  margin-left: 4px;
+  color: #9a94aa;
+  font-size: 9px;
+  font-weight: 550;
+}
+
+.level-segments {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.level-segment {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 46px;
+  padding: 6px 2px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #625c72;
+  cursor: pointer;
+}
+
+.level-segment strong {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.level-segment span {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.level-segment.is-selected {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--purple), #7a68fb);
+  color: white;
+  box-shadow: 0 6px 16px rgba(89, 70, 223, 0.22);
+}
+
+.selection-hint {
+  margin: 6px 2px 10px;
+  color: #827b93;
+  font-size: 10px;
+}
+
+.situation-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 7px;
+}
+
+.situation-chip {
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid rgba(105, 87, 244, 0.16);
+  border-radius: 999px;
+  background: white;
+  color: #5b5370;
+  font-size: 10.5px;
+  font-weight: 680;
+  cursor: pointer;
+}
+
+.situation-chip.is-selected {
+  border-color: var(--purple);
+  background: var(--purple-soft);
+  color: var(--purple-dark);
+}
+
+.selection-situation-input {
+  width: 100%;
+  min-height: 52px;
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  outline: none;
+  resize: none;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.48;
+}
+
+.selection-situation-input:focus {
+  border-color: rgba(105, 87, 244, 0.39);
+  box-shadow: 0 0 0 3px rgba(105, 87, 244, 0.07);
+}
+
+.selection-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 0;
+  color: #6f6982;
+  font-size: 12px;
+}
+
+.selection-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: #6f6982;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.selection-result-text {
+  min-height: 150px;
+  max-height: 300px;
+}
+
+.selection-actions {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.selection-actions .primary-button span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.selection-actions .secondary-button {
+  min-width: 82px;
+}
+
+.selection-actions > .primary-button:only-of-type,
+.selection-actions > .is-hidden + .primary-button {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
+
+.selection-secondary {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.selection-secondary .mini-button {
+  height: 30px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.check-row input {
+  margin-top: 2px;
+  accent-color: var(--purple);
+}
+
+.check-row small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 500;
+}
+
+/* 복사한 글 제안 줄이 뜨면 그만큼 화면을 줄여, 아래 버튼이 밀려 잘리지 않게 한다. */
+.panel-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-content > .view {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.panel-content > .copy-offer {
+  flex: 0 0 auto;
+}

@@ -1,6 +1,8 @@
 "use strict";
 
 const DEFAULT_SHORTCUT = "CommandOrControl+Shift+Space";
+// 다른 프로그램에서 드래그해 둔 글을 바로 강화하는 단축키. G는 "글"의 첫 소리다.
+const DEFAULT_SELECTION_SHORTCUT = "CommandOrControl+Shift+G";
 
 function registerWithFallback({
   preferred,
@@ -40,4 +42,4 @@ function registerWithFallback({
   };
 }
 
-module.exports = { DEFAULT_SHORTCUT, registerWithFallback };
+module.exports = { DEFAULT_SELECTION_SHORTCUT, DEFAULT_SHORTCUT, registerWithFallback };

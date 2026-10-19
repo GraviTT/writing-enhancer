@@ -245,6 +245,7 @@ test("Windows·Android 업데이트와 배포 작업이 같은 저장소와 파�
   assert.match(workflow, /signing-certificate\.sha256/u);
   assert.match(read("android/signing-certificate.sha256"), /^[0-9a-f]{64}\s*$/u);
   // 개발·QA·스모크 실행에서는 업데이트를 확인하지 않는다.
-  const start = main.indexOf("    createTray();\n    registerInitialShortcut(configStore.getShortcut());\n    startUpdateChecks();");
+  const start = main.indexOf("    createTray();\n    registerInitialShortcut(configStore.getShortcut());");
   assert.ok(start > main.indexOf("} else if (SMOKE_TEST) {"));
+  assert.ok(main.indexOf("    startUpdateChecks();", start) > start);
 });

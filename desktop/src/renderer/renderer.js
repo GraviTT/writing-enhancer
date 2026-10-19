@@ -20,6 +20,7 @@ const elements = Object.fromEntries(
     "resultView",
     "loadingView",
     "loadingText",
+    "selectionView",
     "situationInput",
     "situationToggle",
     "situationSection",
@@ -77,6 +78,8 @@ const elements = Object.fromEntries(
     "openaiStatus",
     "geminiStatus",
     "shortcutInput",
+    "selectionShortcutInput",
+    "copyOfferInput",
     "memoryCount",
     "memoryAdditionsDisabled",
     "manageMemoryButton",
@@ -152,15 +155,13 @@ function setExpanded(expanded, side) {
   if (side === "left" || side === "right") elements.app.dataset.side = side;
   if (expanded) {
     window.setTimeout(() => {
-      if (document.querySelector(".overlay-popup:not(.is-hidden)")) return;
-      const target = !elements.inputView.classList.contains("is-hidden")
-        ? elements.sourceInput
-        : !elements.guessView.classList.contains("is-hidden")
-          ? elements.guessAnswer
-          : elements.replyInput;
-      target?.focus();
+      if (state.surface === "writing") focusWritingInput();
     }, 80);
   }
+}
+
+function isSelectionView() {
+  return !elements.selectionView.classList.contains("is-hidden");
 }
 
 function setView(name) {
@@ -168,7 +169,11 @@ function setView(name) {
   elements.guessView.classList.toggle("is-hidden", name !== "guess");
   elements.resultView.classList.toggle("is-hidden", name !== "result");
   elements.loadingView.classList.toggle("is-hidden", name !== "loading");
-  elements.newButton.classList.toggle("is-hidden", name === "input" || state.surface === "chat");
+  elements.selectionView.classList.toggle("is-hidden", name !== "selection");
+  elements.newButton.classList.toggle(
+    "is-hidden",
+    name === "input" || name === "selection" || state.surface === "chat"
+  );
   window.scrollTo(0, 0);
 }
 
@@ -187,7 +192,7 @@ function showSurface(name) {
   elements.historyButton.classList.toggle("is-hidden", chat);
   elements.newButton.classList.toggle(
     "is-hidden",
-    chat || !elements.inputView.classList.contains("is-hidden")
+    chat || !elements.inputView.classList.contains("is-hidden") || isSelectionView()
   );
   if (chat) {
     window.sideChatSurface?.focus();
@@ -199,6 +204,10 @@ function showSurface(name) {
 
 function focusWritingInput() {
   if (document.querySelector(".overlay-popup:not(.is-hidden)")) return;
+  if (isSelectionView()) {
+    window.selectionPanel?.focus();
+    return;
+  }
   const target = !elements.inputView.classList.contains("is-hidden")
     ? elements.sourceInput
     : !elements.guessView.classList.contains("is-hidden")
@@ -210,6 +219,11 @@ function focusWritingInput() {
 window.writingPanel = {
   showSurface,
   currentSurface: () => state.surface,
+  setView,
+  currentView: () => currentViewName(),
+  showToast: (...args) => showToast(...args),
+  openSettings: () => openSettings(),
+  openHistoryRecord: (id) => openHistoryRecord(id),
   // 업데이트로 앱을 닫기 직전 작성 중인 글을 저장한다.
   flushDraft: async () => {
     window.clearTimeout(state.draftTimer);
@@ -382,6 +396,8 @@ function draftPayload({ includeAttachments = false } = {}) {
 }
 
 function currentViewName() {
+  // 선택한 글 강화 화면은 따로 떠 있는 화면이라, 그 아래 원래 글 강화기 화면을 알려 준다.
+  if (isSelectionView()) return window.selectionPanel?.previousView() || "input";
   if (!elements.loadingView.classList.contains("is-hidden")) return "loading";
   if (!elements.resultView.classList.contains("is-hidden")) return "result";
   if (!elements.guessView.classList.contains("is-hidden")) return "guess";
@@ -794,6 +810,8 @@ async function openSettings() {
       : "연결됨"
     : "";
   elements.shortcutInput.value = settings.shortcut;
+  elements.selectionShortcutInput.value = settings.selectionShortcut;
+  elements.copyOfferInput.checked = settings.copyOfferEnabled !== false;
   elements.memoryCount.textContent = `${settings.memoryCount}개 저장됨 · 기존 기억은 유지`;
   elements.memoryAdditionsDisabled.checked = settings.memoryAdditionsEnabled === false;
   elements.windowMode.value = settings.windowMode;
@@ -802,7 +820,9 @@ async function openSettings() {
   elements.windowWidthInput.value = String(settings.windowWidth);
   elements.windowHeightInput.value = String(settings.windowHeight);
   settingsRangeLabels();
-  elements.settingsError.textContent = settings.shortcutWarning || "";
+  elements.settingsError.textContent = [settings.shortcutWarning, settings.selectionShortcutWarning]
+    .filter(Boolean)
+    .join(" ");
   elements.settingsPopup.classList.remove("is-hidden");
   window.setTimeout(() => elements.settingsCloseButton.focus(), 30);
 }
@@ -817,6 +837,7 @@ function displaySettingsPayload() {
   const height = Number(elements.windowHeightInput.value);
   return {
     shortcut: state.settings?.shortcut || elements.shortcutInput.value.trim(),
+    copyOfferEnabled: elements.copyOfferInput.checked,
     memoryAdditionsEnabled: !elements.memoryAdditionsDisabled.checked,
     windowMode: elements.windowMode.value,
     windowOpacity: Number(elements.opacityInput.value) / 100,
@@ -880,26 +901,10 @@ function renderHistoryItems(items) {
     meta.textContent = `${historyDate(item.updatedAt)} · 결과 ${item.versionCount}개`;
     open.append(title, inputPreview, preview, meta);
     open.addEventListener("click", async () => {
-      const record = await api.getHistory(item.id);
-      if (!record) {
-        showToast("이 작업을 찾지 못했어요.");
-        return;
+      if (await openHistoryRecord(item.id)) {
+        elements.historyPopup.classList.add("is-hidden");
+        showToast("이전 작업을 불러왔어요.");
       }
-      elements.situationInput.value = record.situation;
-      elements.sourceInput.value = record.input;
-      state.attachments = [];
-      state.versions = record.versions;
-      state.versionIndex = record.versionIndex;
-      state.historyId = record.id;
-      state.guess = null;
-      updateEnhancementControls(
-        record.versions[record.versionIndex]?.enhancementLevel || levelPolicy.DEFAULT
-      );
-      renderAttachments();
-      saveDraftAttachments();
-      renderCurrentVersion();
-      elements.historyPopup.classList.add("is-hidden");
-      showToast("이전 작업을 불러왔어요.");
     });
     const remove = document.createElement("button");
     remove.type = "button";
@@ -915,6 +920,29 @@ function renderHistoryItems(items) {
     card.append(open, remove);
     elements.historyList.append(card);
   }
+}
+
+// 기록 하나를 글 강화기 화면에 불러온다. 지금 쓰던 글은 결과가 있으면 이미 기록에 있다.
+async function openHistoryRecord(id) {
+  const record = await api.getHistory(id);
+  if (!record) {
+    showToast("이 작업을 찾지 못했어요.");
+    return false;
+  }
+  elements.situationInput.value = record.situation;
+  elements.sourceInput.value = record.input;
+  state.attachments = [];
+  state.versions = record.versions;
+  state.versionIndex = record.versionIndex;
+  state.historyId = record.id;
+  state.guess = null;
+  updateEnhancementControls(
+    record.versions[record.versionIndex]?.enhancementLevel || levelPolicy.DEFAULT
+  );
+  renderAttachments();
+  saveDraftAttachments();
+  renderCurrentVersion();
+  return true;
 }
 
 async function openHistory() {
@@ -1178,6 +1206,7 @@ elements.fontScaleInput.addEventListener("input", () => {
 elements.windowWidthInput.addEventListener("input", previewDisplaySettings);
 elements.windowHeightInput.addEventListener("input", previewDisplaySettings);
 elements.windowMode.addEventListener("change", previewDisplaySettings);
+elements.copyOfferInput.addEventListener("change", previewDisplaySettings);
 elements.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   elements.settingsError.textContent = "";
@@ -1185,6 +1214,7 @@ elements.settingsForm.addEventListener("submit", async (event) => {
     ...displaySettingsPayload(),
     updateShortcut: true,
     shortcut: elements.shortcutInput.value.trim(),
+    selectionShortcut: elements.selectionShortcutInput.value.trim(),
     openaiKey: elements.openaiKey.value.trim(),
     geminiKey: elements.geminiKey.value.trim()
   });
@@ -1210,7 +1240,9 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     return;
   }
-  if (!closeTopOverlay()) api.collapsePanel();
+  if (closeTopOverlay()) return;
+  if (state.surface === "writing" && window.selectionPanel?.handleEscape()) return;
+  api.collapsePanel();
 });
 window.addEventListener("beforeunload", () => {
   api.saveDraft(draftPayload());

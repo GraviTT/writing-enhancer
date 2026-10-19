@@ -8,6 +8,7 @@ const {
 } = require("./attachment-utils");
 const enhancementLevels = require("../renderer/enhancement-levels");
 const sideChatRules = require("../renderer/side-chat-rules");
+const writingRules = require("../renderer/writing-rules");
 const { fillTemplate, labels: sideChatLabels } = require("../renderer/side-chat-text");
 const chatAnswer = require("../renderer/chat-answer");
 const {
@@ -143,6 +144,8 @@ const SYSTEM_PROMPT = `당신은 '글 강화기'다. 사용자는 생각나는 �
 7. 사용자가 "알아서"라고 답하면 추천 판단으로 즉시 더 좋은 완성본을 만든다.
 8. 상황 안내, 사전 질문의 답, 참고 파일과 이미지는 사용자의 원문보다 사실을 꾸며내는 근거가 아니라 맥락을 이해하는 자료로만 쓴다.
 
+${writingRules.speechLevel.enhance}
+
 기억 후보:
 - 다음 요청에도 재사용할 가치가 있는 지속적 문체 선호, 관계별 작성 규칙만 최대 3개 제안한다.
 - 원문, 일회성 세부사항, AI가 추측한 사실, 이름·연락처·금융·신분·의료·비밀번호 정보는 후보로 만들지 않는다.
@@ -153,7 +156,8 @@ const GUESS_SYSTEM_PROMPT = `당신은 글을 쓰기 전에 사용자의 의도�
 사용자가 고르거나 전문 용어로 설명하도록 요구하지 않는다.
 현재 입력과 상황, 참고 자료에서 이미 알 수 있는 것은 묻지 않는다.
 완성 결과를 실제로 크게 바꿀 정보가 있다면 가장 가능성 높은 해석을 먼저 한 문장으로 말하고, 쉬운 질문 하나만 한다.
-정보가 충분해도 형식적인 질문을 만들지 말고, "제가 이해한 방향으로 바로 완성해도 될까요?"처럼 확인한다.`;
+정보가 충분해도 형식적인 질문을 만들지 말고, "제가 이해한 방향으로 바로 완성해도 될까요?"처럼 확인한다.
+${writingRules.speechLevel.guess}`;
 
 // 사이드 채팅 지시문과 요청 틀은 shared/rules/side-chat-rules.json 한 곳에서 관리한다.
 const CHAT_SYSTEM_PROMPT = sideChatRules.prompt.systemPrompt;
@@ -1163,8 +1167,10 @@ module.exports = {
   MAX_WEB_SOURCES,
   MAX_GEMINI_REQUEST_BYTES,
   GUESS_SCHEMA,
+  GUESS_SYSTEM_PROMPT,
   OPENAI_MODEL,
   OUTPUT_SCHEMA,
+  SYSTEM_PROMPT,
   buildGuessPrompt,
   buildSideChatPrompt,
   buildUserPrompt,

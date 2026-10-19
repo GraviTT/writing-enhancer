@@ -869,7 +869,8 @@ class AiClient(private val secureStore: SecureStore) {
         // 웹 검색과 추론 중에는 글 조각이 한동안 오지 않을 수 있다.
         private const val CHAT_READ_TIMEOUT_MS = 120_000
 
-        private val SYSTEM_INSTRUCTIONS = """
+        // 말투 맞추기 규칙은 Windows와 같은 shared/rules/writing-rules.json에서 온다.
+        internal val SYSTEM_INSTRUCTIONS = """
             당신은 한국어 중심의 '글 강화기'다. 사용자는 횡설수설하거나, 맞춤법이 틀리거나,
             상황을 설명하지 못할 수 있다. 선택이나 설정을 요구하지 말고 가장 가능성 높은 의도를
             추론해 곧바로 보기 좋은 완성본을 만든다.
@@ -895,7 +896,7 @@ class AiClient(private val secureStore: SecureStore) {
             9. 상황/용도 안내와 첨부 파일·이미지가 있으면 사실과 맥락을 파악하는 참고자료로 쓴다.
             10. 처리 방식이 질문 우선이면 글을 완성하지 않는다. 가장 중요한 미확정 사항 하나를
                 AI의 추천과 함께 follow_up으로 묻고 completed_text는 빈 문자열로 둔다.
-        """.trimIndent()
+        """.trimIndent() + "\n\n" + SharedWritingRules.ENHANCE_SPEECH_LEVEL
 
     }
 }

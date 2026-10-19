@@ -5,6 +5,10 @@ const path = require("node:path");
 
 const DEFAULTS = Object.freeze({
   shortcut: "CommandOrControl+Shift+Space",
+  // 다른 프로그램에서 드래그해 둔 글을 바로 강화하는 단축키
+  selectionShortcut: "CommandOrControl+Shift+G",
+  // 창을 열 때 방금 다른 프로그램에서 복사한 글을 강화할지 묻는다.
+  copyOfferEnabled: true,
   memoryEnabled: true,
   memoryAdditionsEnabled: true,
   windowMode: "docked",
@@ -33,6 +37,8 @@ function normalizePlacement(value) {
 function normalizePublic(value = {}) {
   return {
     shortcut: String(value.shortcut || DEFAULTS.shortcut).slice(0, 120),
+    selectionShortcut: String(value.selectionShortcut || DEFAULTS.selectionShortcut).slice(0, 120),
+    copyOfferEnabled: value.copyOfferEnabled !== false,
     memoryEnabled: value.memoryEnabled !== false,
     memoryAdditionsEnabled:
       typeof value.memoryAdditionsEnabled === "boolean"
@@ -97,6 +103,10 @@ class ConfigStore {
     return this.data.shortcut || DEFAULTS.shortcut;
   }
 
+  getSelectionShortcut() {
+    return this.data.selectionShortcut || DEFAULTS.selectionShortcut;
+  }
+
   getApiKey(provider) {
     const envName = provider === "openai" ? "OPENAI_API_KEY" : "GEMINI_API_KEY";
     if (process.env[envName]) {
@@ -133,6 +143,8 @@ class ConfigStore {
 
   save({
     shortcut,
+    selectionShortcut,
+    copyOfferEnabled,
     memoryEnabled,
     memoryAdditionsEnabled,
     windowMode,
@@ -148,6 +160,12 @@ class ConfigStore {
   }) {
     if (shortcut) {
       this.data.shortcut = String(shortcut).trim();
+    }
+    if (selectionShortcut) {
+      this.data.selectionShortcut = String(selectionShortcut).trim();
+    }
+    if (typeof copyOfferEnabled === "boolean") {
+      this.data.copyOfferEnabled = copyOfferEnabled;
     }
     if (typeof memoryEnabled === "boolean") {
       this.data.memoryEnabled = memoryEnabled;

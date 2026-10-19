@@ -12,11 +12,17 @@ const path = require("node:path");
 const repository = path.resolve(__dirname, "..", "..");
 const rulesPath = path.join(repository, "shared", "rules", "side-chat-rules.json");
 const casesPath = path.join(repository, "shared", "rules", "side-chat-cases.json");
+const writingRulesPath = path.join(repository, "shared", "rules", "writing-rules.json");
 const outputs = {
   desktopRules: path.join(repository, "desktop", "src", "renderer", "side-chat-rules.js"),
+  desktopWritingRules: path.join(repository, "desktop", "src", "renderer", "writing-rules.js"),
   androidRules: path.join(
     repository,
     "android/app/src/main/java/com/example/writingenhancer/ai/SharedSideChatRules.kt"
+  ),
+  androidWritingRules: path.join(
+    repository,
+    "android/app/src/main/java/com/example/writingenhancer/ai/SharedWritingRules.kt"
   ),
   androidCases: path.join(
     repository,
@@ -565,6 +571,89 @@ ${promptCases}
 `;
 }
 
+// 글 강화 규칙(말투 맞추기, 선택한 글 강화 창의 단계·상황 목록).
+// 상황 버튼은 휴대폰에서 한 줄에 여러 개가 들어가야 하므로 이름을 짧게 제한한다.
+function validateWritingRules(writing) {
+  const fail = (message) => {
+    throw new Error(`글 강화 규칙 오류: ${message}`);
+  };
+  if (!Number.isInteger(writing.version)) fail("version은 정수여야 합니다.");
+  const enhance = writing.speechLevel?.enhance;
+  if (!Array.isArray(enhance) || enhance.length === 0 || enhance.some((line) => typeof line !== "string")) {
+    fail("speechLevel.enhance는 글 줄 목록이어야 합니다.");
+  }
+  if (typeof writing.speechLevel.guess !== "string" || !writing.speechLevel.guess.trim()) {
+    fail("speechLevel.guess가 비어 있습니다.");
+  }
+  const shortLabels = writing.selection?.levelShortLabels;
+  if (!Array.isArray(shortLabels) || shortLabels.length !== 5) fail("levelShortLabels는 5단계 이름이어야 합니다.");
+  const situations = writing.selection?.situations;
+  if (!Array.isArray(situations) || situations.length === 0) fail("situations가 비어 있습니다.");
+  const labels = new Set();
+  for (const situation of situations) {
+    if (typeof situation?.label !== "string" || !situation.label.trim()) fail("상황 이름이 비어 있습니다.");
+    if ([...situation.label].length > 6) fail(`상황 이름은 6자 이하여야 합니다: ${situation.label}`);
+    if (typeof situation.text !== "string" || !situation.text.trim()) fail(`상황 설명이 비어 있습니다: ${situation.label}`);
+    if (labels.has(situation.label)) fail(`상황 이름이 겹칩니다: ${situation.label}`);
+    labels.add(situation.label);
+  }
+}
+
+function writingData(writing) {
+  return {
+    version: writing.version,
+    speechLevel: {
+      enhance: writing.speechLevel.enhance.join("\n"),
+      guess: writing.speechLevel.guess
+    },
+    selection: writing.selection
+  };
+}
+
+function renderDesktopWritingRules(data) {
+  const json = JSON.stringify(data, null, 2);
+  return `${HEADER_LINES.map((line) => `// ${line}`).join("\n")}
+(function exposeWritingRules(root, rules) {
+  "use strict";
+
+  const freeze = (value) => {
+    if (value && typeof value === "object" && !Object.isFrozen(value)) {
+      Object.values(value).forEach(freeze);
+      Object.freeze(value);
+    }
+    return value;
+  };
+  const api = freeze(rules);
+  if (typeof module === "object" && module.exports) module.exports = api;
+  if (root) root.writingRules = api;
+})(typeof globalThis === "object" ? globalThis : this, ${json});
+`;
+}
+
+function renderAndroidWritingRules(data) {
+  const situations = ktList(
+    data.selection.situations,
+    (situation) => `Situation(${kt(situation.label)}, ${kt(situation.text)})`
+  );
+  return `${HEADER_LINES.map((line) => `// ${line}`).join("\n")}
+package com.example.writingenhancer.ai
+
+object SharedWritingRules {
+    data class Situation(val label: String, val text: String)
+
+    const val VERSION = ${data.version}
+    const val ENHANCE_SPEECH_LEVEL = ${kt(data.speechLevel.enhance)}
+    const val GUESS_SPEECH_LEVEL = ${kt(data.speechLevel.guess)}
+
+    val LEVEL_SHORT_LABELS: List<String> = ${ktStrings(data.selection.levelShortLabels)}
+
+    val SITUATIONS: List<Situation> = listOf(
+${situations}
+    )
+}
+`;
+}
+
 function loadDesktop() {
   for (const key of Object.keys(require.cache)) {
     if (key.startsWith(path.join(repository, "desktop", "src"))) delete require.cache[key];
@@ -581,6 +670,8 @@ function main() {
   const rules = readJson(rulesPath);
   const cases = readJson(casesPath);
   const actionNames = validate(rules, cases);
+  const writing = readJson(writingRulesPath);
+  validateWritingRules(writing);
 
   const stale = [];
   const emit = (file, content) => {
@@ -596,6 +687,8 @@ function main() {
   };
 
   emit(outputs.desktopRules, renderDesktopRules(desktopData(rules, actionNames)));
+  emit(outputs.desktopWritingRules, renderDesktopWritingRules(writingData(writing)));
+  emit(outputs.androidWritingRules, renderAndroidWritingRules(writingData(writing)));
   if (check && stale.length > 0) {
     console.error(`생성 파일이 원본과 다릅니다: ${stale.join(", ")}\nshared 폴더에서 npm run rules 를 실행하세요.`);
     process.exitCode = 1;

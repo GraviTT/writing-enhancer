@@ -33,13 +33,24 @@ const {
 const { ConfigStore } = require("./lib/config-store");
 const { DraftStore } = require("./lib/draft-store");
 const { HistoryStore } = require("./lib/history-store");
+const { APP_USER_MODEL_ID, ensureInstallShortcuts } = require("./lib/install-shortcuts");
 const { groundMemoryCandidates } = require("./lib/memory-grounding");
 const { MemoryStore } = require("./lib/memory-store");
+const {
+  SelectionHelper,
+  appLabel,
+  cleanSelection,
+  copyMode,
+  pasteMode,
+  restoreClipboard,
+  snapshotClipboard
+} = require("./lib/selection-helper");
 const { SideChatStore } = require("./lib/side-chat-store");
 const { UpdateManager, updatableInstall } = require("./lib/updater");
 const chatAnswer = require("./renderer/chat-answer");
 const enhancementLevels = require("./renderer/enhancement-levels");
 const {
+  DEFAULT_SELECTION_SHORTCUT,
   DEFAULT_SHORTCUT,
   registerWithFallback
 } = require("./lib/shortcut-registration");
@@ -74,6 +85,19 @@ let shortcutStatus = {
   activeShortcut: "",
   warning: ""
 };
+let selectionShortcutStatus = {
+  registered: false,
+  activeShortcut: "",
+  warning: ""
+};
+// 전역 단축키 두 개(창 열기, 선택한 글 강화)가 지금 쓰는 조합.
+const registeredShortcuts = { panel: "", selection: "" };
+let selectionHelper = null;
+let selectionCaptureBusy = false;
+// 바꿔 넣을 프로그램 창은 화면에 넘기지 않고 이 표식으로만 찾는다. 가장 최근 것 하나만 둔다.
+const selectionTargets = new Map();
+// 마지막으로 확인한 클립보드 글의 지문. 새로 복사한 글만 강화 제안에 쓴다.
+let lastClipboardFingerprint = "";
 const pendingMemoryApprovals = new Map();
 // 진행 중인 사이드 채팅 요청과, 사용자 확인을 기다리는 채팅 제안 동작.
 let activeSideChatRequest = null;
@@ -452,9 +476,11 @@ function togglePanel() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!mainWindow.isVisible()) {
     setPanelState(true);
+    offerCopiedText();
     return;
   }
   setPanelState(!isExpanded, { animate: true });
+  if (isExpanded) offerCopiedText();
 }
 
 function createWindow() {
@@ -507,7 +533,15 @@ function createWindow() {
       setPanelState(false, { focus: false });
     }
   });
+  mainWindow.webContents.on("context-menu", (_event, params) => {
+    const template = editContextMenu(params);
+    if (template.length === 0) return;
+    const release = blockAutoCollapse();
+    Menu.buildFromTemplate(template).popup({ window: mainWindow, callback: release });
+  });
   mainWindow.on("blur", () => {
+    // 이 창에서 복사한 글은 나중에 "복사한 글 강화" 제안으로 다시 묻지 않는다.
+    rememberClipboard();
     if (!canAutoCollapse() || !mainWindow?.isVisible() || !isExpanded) return;
     setPanelState(false, { animate: true, focus: false });
   });
@@ -565,6 +599,20 @@ async function captureQaScreens() {
   await captureChat("window.__sideChatQa?.showProgressDemo()", "v5-02-side-chat-progress.png");
   await captureChat("window.__sideChatQa?.showSourceDialogDemo()", "v5-03-side-chat-source-dialog.png");
   await captureChat("window.__sideChatQa?.showStreamingDemo()", "v5-04-side-chat-streaming.png");
+  const captureSelection = async (script, fileName) => {
+    await mainWindow.webContents.executeJavaScript(
+      `window.writingPanel?.showSurface("writing"); window.__writingEnhancerQa?.show("input"); ${script}`
+    );
+    await wait(180);
+    await capture(fileName);
+  };
+  await captureSelection('window.selectionPanel?.showDemo("options")', "v6-01-selection-options.png");
+  await captureSelection('window.selectionPanel?.showDemo("result")', "v6-02-selection-result.png");
+  await captureSelection(
+    'window.selectionPanel?.close(); document.querySelector("#copyOfferPreview").textContent = "내일 회의 자료 아직 못 만들었어. 오늘 밤까지 정리해서… · 41자"; document.querySelector("#copyOffer").classList.remove("is-hidden")',
+    "v6-03-copy-offer.png"
+  );
+  await mainWindow.webContents.executeJavaScript('document.querySelector("#copyOffer").classList.add("is-hidden")');
   await mainWindow.webContents.executeJavaScript('window.writingPanel?.showSurface("writing")');
   setPanelState(true, { focus: false, remember: false });
   setPanelState(true, { focus: false, remember: false });
@@ -575,21 +623,275 @@ async function captureQaScreens() {
   app.quit();
 }
 
-function registerShortcut(shortcut) {
-  globalShortcut.unregisterAll();
-  if (!globalShortcut.register(shortcut, togglePanel)) {
+const SHORTCUT_ACTIONS = {
+  panel: () => togglePanel(),
+  selection: () => enhanceSelectionFromShortcut()
+};
+
+// kind("panel" 또는 "selection") 단축키를 바꾼다. 실패하면 쓰던 조합을 그대로 둔다.
+function registerShortcut(shortcut, kind = "panel") {
+  const other = kind === "panel" ? "selection" : "panel";
+  if (shortcut && shortcut.toLowerCase() === registeredShortcuts[other].toLowerCase()) {
+    throw new Error(`단축키 ${shortcut}은 이미 다른 기능에 쓰고 있어요. 다른 조합을 입력해 주세요.`);
+  }
+  const previous = registeredShortcuts[kind];
+  if (previous === shortcut && globalShortcut.isRegistered(shortcut)) return;
+  if (previous) globalShortcut.unregister(previous);
+  registeredShortcuts[kind] = "";
+  let registered = false;
+  try {
+    registered = globalShortcut.register(shortcut, SHORTCUT_ACTIONS[kind]);
+  } catch {
+    registered = false;
+  }
+  if (!registered) {
+    if (previous) {
+      try {
+        if (globalShortcut.register(previous, SHORTCUT_ACTIONS[kind])) registeredShortcuts[kind] = previous;
+      } catch {
+        // 예전 조합도 쓸 수 없으면 비워 둔다.
+      }
+    }
     throw new Error(`단축키 ${shortcut}을 등록할 수 없습니다. 다른 조합을 입력해 주세요.`);
   }
+  registeredShortcuts[kind] = shortcut;
 }
 
 function registerInitialShortcut(preferred) {
   shortcutStatus = registerWithFallback({
     preferred,
     fallback: DEFAULT_SHORTCUT,
-    register: registerShortcut
+    register: (shortcut) => registerShortcut(shortcut, "panel")
   });
-  if (!shortcutStatus.registered) globalShortcut.unregisterAll();
   return shortcutStatus;
+}
+
+function registerInitialSelectionShortcut(preferred) {
+  const result = registerWithFallback({
+    preferred,
+    fallback: DEFAULT_SELECTION_SHORTCUT,
+    register: (shortcut) => registerShortcut(shortcut, "selection")
+  });
+  selectionShortcutStatus = {
+    ...result,
+    warning: result.registered
+      ? result.warning.replace("열 수 있어요", "선택한 글을 강화할 수 있어요")
+      : "선택한 글 강화 단축키를 등록하지 못했어요. 설정에서 다른 조합을 입력해 주세요."
+  };
+  return selectionShortcutStatus;
+}
+
+function shortcutSettings() {
+  return {
+    shortcutRegistered: shortcutStatus.registered,
+    activeShortcut: shortcutStatus.activeShortcut,
+    shortcutWarning: shortcutStatus.warning,
+    selectionShortcutRegistered: selectionShortcutStatus.registered,
+    activeSelectionShortcut: selectionShortcutStatus.activeShortcut,
+    selectionShortcutWarning: selectionShortcutStatus.warning
+  };
+}
+
+// ── 선택한 글 강화 ─────────────────────────────────────────
+
+function getSelectionHelper() {
+  if (process.platform !== "win32") return null;
+  selectionHelper ??= new SelectionHelper({ directory: path.join(app.getPath("userData"), "helper") });
+  return selectionHelper;
+}
+
+function clipboardFingerprint(value) {
+  return crypto.createHash("sha256").update(cleanSelection(value)).digest("hex");
+}
+
+// 지금 클립보드 글을 "이미 본 글"로 기록한다. 앱이 직접 쓴 글이나 이 앱 창에서 복사한 글은 제안하지 않는다.
+function rememberClipboard() {
+  try {
+    lastClipboardFingerprint = clipboardFingerprint(clipboard.readText());
+  } catch {
+    lastClipboardFingerprint = "";
+  }
+}
+
+function writeClipboardText(value) {
+  clipboard.writeText(value);
+  rememberClipboard();
+}
+
+function rememberSelectionTarget(target) {
+  selectionTargets.clear();
+  if (!target?.hwnd) return "";
+  const token = crypto.randomUUID();
+  selectionTargets.set(token, target);
+  return token;
+}
+
+function selectionPayload({ text, target, source }) {
+  return {
+    text,
+    source,
+    token: rememberSelectionTarget(target),
+    targetLabel: target ? appLabel(target) : "",
+    canReplace: Boolean(target?.hwnd)
+  };
+}
+
+function openSelection({ text, target = null, source }) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  showWritingWindow({ focus: true });
+  mainWindow.webContents.send("selection:open", selectionPayload({ text, target, source }));
+}
+
+// 맨 앞 프로그램에서 선택한 글을 복사 키로 가져오고, 원래 클립보드 내용을 되돌린다.
+async function captureForegroundSelection() {
+  const helper = getSelectionHelper();
+  if (!helper) return { text: "", reason: "unsupported" };
+  const target = await helper.request("foreground");
+  if (!target?.ok) return { text: "", reason: "foreground" };
+  const ownWindow = Number(target.pid) === process.pid;
+  const snapshot = snapshotClipboard(clipboard);
+  const copied = await helper.request("copy", [copyMode(target.process)], 8_000);
+  if (!copied?.ok) return { text: "", reason: copied?.reason || "copy" };
+  if (!copied.changed) return { text: "", reason: "empty" };
+  let text = "";
+  for (let attempt = 0; attempt < 5 && !text; attempt += 1) {
+    text = cleanSelection(clipboard.readText());
+    if (!text) await wait(40);
+  }
+  restoreClipboard(clipboard, snapshot);
+  rememberClipboard();
+  return { text, target: ownWindow ? null : target, reason: text ? "" : "empty" };
+}
+
+async function enhanceSelectionFromShortcut() {
+  if (selectionCaptureBusy || !mainWindow || mainWindow.isDestroyed()) return;
+  selectionCaptureBusy = true;
+  try {
+    const { text, target, reason } = await captureForegroundSelection();
+    if (text) {
+      openSelection({ text, target, source: "shortcut" });
+      return;
+    }
+    showWritingWindow({ focus: true });
+    mainWindow.webContents.send("selection:empty", {
+      reason,
+      shortcut: selectionShortcutStatus.activeShortcut
+    });
+  } catch {
+    showWritingWindow({ focus: true });
+    mainWindow.webContents.send("selection:empty", {
+      reason: "error",
+      shortcut: selectionShortcutStatus.activeShortcut
+    });
+  } finally {
+    selectionCaptureBusy = false;
+  }
+}
+
+// 창을 열 때, 그 사이 다른 프로그램에서 새로 복사한 글이 있으면 강화할지 묻는다.
+function offerCopiedText() {
+  if (!configStore.getPublicSettings().copyOfferEnabled || !mainWindow || mainWindow.isDestroyed()) return;
+  let text = "";
+  try {
+    text = cleanSelection(clipboard.readText());
+  } catch {
+    return;
+  }
+  const fingerprint = clipboardFingerprint(text);
+  if (!text || fingerprint === lastClipboardFingerprint) return;
+  lastClipboardFingerprint = fingerprint;
+  if ([...text].length < 2) return;
+  mainWindow.webContents.send("selection:offer", {
+    preview: text.replace(/\s+/gu, " ").slice(0, 60),
+    length: text.length
+  });
+}
+
+async function useCopiedText() {
+  const text = cleanSelection(clipboard.readText());
+  if (!text) {
+    return { ok: false, error: { code: "EMPTY_CLIPBOARD", message: "복사한 글이 없어요." } };
+  }
+  rememberClipboard();
+  let target = null;
+  try {
+    // 창을 열기 직전에 쓰던 프로그램(창 순서상 바로 아래 창)에 바꿔 넣을 수 있게 한다.
+    const previous = await getSelectionHelper()?.request("previous", [String(process.pid)]);
+    if (previous?.ok) target = previous;
+  } catch {
+    target = null;
+  }
+  return { ok: true, ...selectionPayload({ text, target, source: "clipboard" }) };
+}
+
+async function replaceSelection(request) {
+  const target = selectionTargets.get(limitedText(request?.token, 80));
+  const text = String(request?.text ?? "").trim();
+  if (!text) return { ok: false, error: { code: "EMPTY_RESULT", message: "바꿔 넣을 글이 없어요." } };
+  if (!target) {
+    writeClipboardText(text);
+    return {
+      ok: false,
+      error: { code: "TARGET_MISSING", message: "바꿔 넣을 곳을 찾지 못해 복사해 두었어요. 직접 붙여 넣어 주세요." }
+    };
+  }
+  const snapshot = snapshotClipboard(clipboard);
+  writeClipboardText(text);
+  let pasted = null;
+  try {
+    pasted = await getSelectionHelper().request("paste", [target.hwnd, pasteMode(target.process)], 8_000);
+  } catch {
+    pasted = null;
+  }
+  if (!pasted?.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "PASTE_FAILED",
+        message: `${appLabel(target) || "원래 프로그램"}에 붙여 넣지 못해 복사해 두었어요. 직접 붙여 넣어 주세요.`
+      }
+    };
+  }
+  selectionTargets.clear();
+  setPanelState(false, { animate: true, focus: false });
+  // 붙여 넣기가 끝날 시간을 두고 원래 클립보드를 되돌린다.
+  setTimeout(() => {
+    try {
+      if (clipboard.readText() === text) {
+        restoreClipboard(clipboard, snapshot);
+        rememberClipboard();
+      }
+    } catch {
+      // 클립보드를 다른 프로그램이 쓰고 있으면 그대로 둔다.
+    }
+  }, 1_200);
+  return { ok: true, targetLabel: appLabel(target) };
+}
+
+function editContextMenu(params) {
+  const template = [];
+  for (const suggestion of (params.dictionarySuggestions || []).slice(0, 4)) {
+    template.push({ label: suggestion, click: () => mainWindow?.webContents.replaceMisspelling(suggestion) });
+  }
+  if (template.length > 0) template.push({ type: "separator" });
+  const selected = cleanSelection(params.selectionText);
+  if (selected) {
+    template.push(
+      { label: "선택한 글 강화", click: () => openSelection({ text: selected, source: "context-menu" }) },
+      { type: "separator" }
+    );
+  }
+  const flags = params.editFlags || {};
+  if (params.isEditable) template.push({ label: "잘라내기", role: "cut", enabled: flags.canCut !== false });
+  if (params.isEditable || selected) template.push({ label: "복사", role: "copy", enabled: flags.canCopy !== false });
+  if (params.isEditable) {
+    template.push(
+      { label: "붙여넣기", role: "paste", enabled: flags.canPaste !== false },
+      { type: "separator" },
+      { label: "모두 선택", role: "selectAll" }
+    );
+  }
+  return template;
 }
 
 function updateMenuItems() {
@@ -616,6 +918,14 @@ function refreshTrayMenu() {
     Menu.buildFromTemplate([
       ...updateMenuItems(),
       { label: "열기 / 접기", click: togglePanel },
+      {
+        label: "복사한 글 강화",
+        click: async () => {
+          const response = await useCopiedText();
+          if (response.ok) openSelection(response);
+          else tray?.displayBalloon({ title: "글 강화기", content: "먼저 강화할 글을 복사해 주세요." });
+        }
+      },
       {
         label: "히스토리",
         click: () => {
@@ -1197,7 +1507,7 @@ function registerIpcHandlers() {
   ipcMain.handle("writing:apply", (_event, text) => {
     const value = String(text ?? "").trim();
     if (!value) return { ok: false };
-    clipboard.writeText(value);
+    writeClipboardText(value);
     setTimeout(() => setPanelState(false, { animate: true, focus: false }), 180);
     return { ok: true };
   });
@@ -1205,7 +1515,7 @@ function registerIpcHandlers() {
   ipcMain.handle("clipboard:write", (_event, request) => {
     const value = String(request?.text ?? "");
     if (!value.trim()) return { ok: false };
-    clipboard.writeText(value);
+    writeClipboardText(value);
     return { ok: true };
   });
 
@@ -1234,25 +1544,55 @@ function registerIpcHandlers() {
   ipcMain.handle("settings:get", () => ({
     ...configStore.getPublicSettings(),
     memoryCount: memoryStore.list().length,
-    shortcutRegistered: shortcutStatus.registered,
-    activeShortcut: shortcutStatus.activeShortcut,
-    shortcutWarning: shortcutStatus.warning
+    ...shortcutSettings()
   }));
+  ipcMain.handle("selection:use-copied", () => useCopiedText());
+  ipcMain.handle("selection:replace", (_event, request) => replaceSelection(request));
+  ipcMain.handle("selection:copy", (_event, request) => {
+    const value = String(request?.text ?? "").trim();
+    if (!value) return { ok: false };
+    writeClipboardText(value);
+    return { ok: true };
+  });
   ipcMain.handle("settings:save", (_event, settings) => {
     const previousShortcut = configStore.getShortcut();
+    const previousSelectionShortcut = configStore.getSelectionShortcut();
+    const canRegister = !QA_CAPTURE && !SMOKE_TEST;
     try {
       const nextShortcut = String(settings?.shortcut || previousShortcut).trim();
+      const nextSelectionShortcut = String(
+        settings?.selectionShortcut || previousSelectionShortcut
+      ).trim();
       const shouldRegisterShortcut =
         settings?.updateShortcut === true || nextShortcut !== previousShortcut;
-      if (shouldRegisterShortcut && !QA_CAPTURE && !SMOKE_TEST) {
-        registerShortcut(nextShortcut);
-        shortcutStatus = {
+      const shouldRegisterSelection =
+        settings?.updateShortcut === true || nextSelectionShortcut !== previousSelectionShortcut;
+      if (shouldRegisterShortcut && canRegister) {
+        registerShortcut(nextShortcut, "panel");
+        shortcutStatus = { registered: true, activeShortcut: nextShortcut, warning: "" };
+      }
+      if (shouldRegisterSelection && canRegister) {
+        try {
+          registerShortcut(nextSelectionShortcut, "selection");
+        } catch (error) {
+          // 창 열기 단축키만 바뀐 상태로 남지 않게 되돌린다.
+          if (shouldRegisterShortcut && nextShortcut !== previousShortcut) {
+            registerShortcut(previousShortcut, "panel");
+            shortcutStatus = { registered: true, activeShortcut: previousShortcut, warning: "" };
+          }
+          throw error;
+        }
+        selectionShortcutStatus = {
           registered: true,
-          activeShortcut: nextShortcut,
+          activeShortcut: nextSelectionShortcut,
           warning: ""
         };
       }
-      const saved = configStore.save({ ...settings, shortcut: nextShortcut });
+      const saved = configStore.save({
+        ...settings,
+        shortcut: nextShortcut,
+        selectionShortcut: nextSelectionShortcut
+      });
       applyAppearance();
       setPanelState(isExpanded, { focus: false, remember: false });
       return {
@@ -1260,20 +1600,14 @@ function registerIpcHandlers() {
         settings: {
           ...saved,
           memoryCount: memoryStore.list().length,
-          shortcutRegistered: shortcutStatus.registered,
-          activeShortcut: shortcutStatus.activeShortcut,
-          shortcutWarning: shortcutStatus.warning
+          ...shortcutSettings()
         }
       };
     } catch (error) {
-      if (!QA_CAPTURE && !SMOKE_TEST) {
+      if (canRegister && registeredShortcuts.panel !== previousShortcut) {
         try {
-          registerShortcut(previousShortcut);
-          shortcutStatus = {
-            registered: true,
-            activeShortcut: previousShortcut,
-            warning: ""
-          };
+          registerShortcut(previousShortcut, "panel");
+          shortcutStatus = { registered: true, activeShortcut: previousShortcut, warning: "" };
         } catch {
           shortcutStatus = {
             registered: false,
@@ -1323,7 +1657,7 @@ function registerIpcHandlers() {
 
 async function initialize() {
   // Windows 알림에 앱 이름을 붙이고 알림을 눌렀을 때 이 앱으로 돌아오게 한다.
-  if (process.platform === "win32") app.setAppUserModelId("com.writingenhancer.desktop");
+  if (process.platform === "win32") app.setAppUserModelId(APP_USER_MODEL_ID);
   const userData = app.getPath("userData");
   configStore = new ConfigStore(path.join(userData, "settings.json"), safeStorage);
   memoryStore = new MemoryStore(path.join(userData, "memories.json"));
@@ -1438,7 +1772,32 @@ async function initialize() {
   } else {
     createTray();
     registerInitialShortcut(configStore.getShortcut());
+    registerInitialSelectionShortcut(configStore.getSelectionShortcut());
+    // 앱을 켜기 전부터 클립보드에 있던 글은 "방금 복사한 글"로 묻지 않는다.
+    rememberClipboard();
+    // 도우미는 처음 띄울 때 몇 초 걸리므로, 단축키를 처음 누르기 전에 미리 띄워 둔다.
+    setTimeout(() => getSelectionHelper()?.start().catch(() => {}), 8_000);
     startUpdateChecks();
+    createInstallShortcuts();
+  }
+}
+
+// 설치하거나 업데이트한 뒤 처음 켤 때 바탕화면·시작 메뉴 바로 가기를 만든다.
+function createInstallShortcuts() {
+  if (process.platform !== "win32") return;
+  if (!updatableInstall({ execPath: process.execPath, isPackaged: app.isPackaged })) return;
+  try {
+    ensureInstallShortcuts({
+      execPath: process.execPath,
+      version: app.getVersion(),
+      desktopDirectory: app.getPath("desktop"),
+      startMenuDirectory: path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs"),
+      statePath: path.join(app.getPath("userData"), "install-shortcuts.json"),
+      shell,
+      temporaryDirectory: app.getPath("temp")
+    });
+  } catch {
+    // 바로 가기를 만들지 못해도 앱은 그대로 쓴다.
   }
 }
 
@@ -1449,5 +1808,8 @@ if (gotSingleInstanceLock) {
     if (!mainWindow) createWindow();
     setPanelState(true);
   });
-  app.on("will-quit", () => globalShortcut.unregisterAll());
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    selectionHelper?.dispose();
+  });
 }

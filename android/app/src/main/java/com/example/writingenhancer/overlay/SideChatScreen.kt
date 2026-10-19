@@ -364,30 +364,33 @@ internal class SideChatScreen(
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
         header.addView(
-            Ui.iconButton(context, UiIcon.NEW, "새 사이드 채팅") { requestNewChat() }.apply {
+            Ui.labeledIconButton(context, UiIcon.NEW_CHAT, "새 채팅", "새 채팅 시작 · 쓰던 글은 그대로 둬요") {
+                requestNewChat()
+            }.apply {
                 isEnabled = !busy
                 alpha = if (busy) 0.34f else 1f
             },
-            LinearLayout.LayoutParams(dp(44), dp(44)),
+            LinearLayout.LayoutParams(dp(46), dp(52)),
         )
         header.addView(
             Ui.quietButton(context, "글로") { host.returnToWriting() }.apply {
                 contentDescription = "글 강화기로 돌아가기"
+                tooltipText = "글 강화기 화면으로 돌아가기"
                 maxLines = 1
                 setPadding(dp(4), dp(4), dp(4), dp(4))
                 setAutoSizeTextTypeUniformWithConfiguration(10, 13, 1, TypedValue.COMPLEX_UNIT_SP)
                 setTextColor(Ui.ACCENT_TEXT)
                 background = Ui.interactive(context, Ui.ACCENT_SURFACE)
             },
-            LinearLayout.LayoutParams(dp(48), dp(44)),
+            LinearLayout.LayoutParams(dp(46), dp(44)),
         )
         header.addView(
-            Ui.iconButton(context, UiIcon.SETTINGS, "설정") { host.openSettings(it) },
-            LinearLayout.LayoutParams(dp(44), dp(44)),
+            Ui.labeledIconButton(context, UiIcon.SETTINGS, "설정", "설정 열기") { host.openSettings(it) },
+            LinearLayout.LayoutParams(dp(46), dp(52)),
         )
         header.addView(
-            Ui.iconButton(context, UiIcon.CLOSE, "버블로 접기") { host.collapse() },
-            LinearLayout.LayoutParams(dp(44), dp(44)),
+            Ui.labeledIconButton(context, UiIcon.CLOSE, "접기", "버블로 접기") { host.collapse() },
+            LinearLayout.LayoutParams(dp(46), dp(52)),
         )
         header.setOnTouchListener(
             WindowDragTouchListener(

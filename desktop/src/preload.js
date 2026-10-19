@@ -76,6 +76,13 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
     subscribe("side-chat:writing-context-updated", callback),
   onSideChatProgress: (callback) => subscribe("side-chat:progress", callback),
   onSideChatDelta: (callback) => subscribe("side-chat:delta", callback),
+  // 다른 프로그램에서 선택하거나 복사한 글 강화
+  useCopiedText: () => ipcRenderer.invoke("selection:use-copied"),
+  replaceSelection: (payload) => ipcRenderer.invoke("selection:replace", payload),
+  copySelectionResult: (text) => ipcRenderer.invoke("selection:copy", { text }),
+  onSelectionOpen: (callback) => subscribe("selection:open", callback),
+  onSelectionEmpty: (callback) => subscribe("selection:empty", callback),
+  onSelectionOffer: (callback) => subscribe("selection:offer", callback),
   getUpdateState: () => ipcRenderer.invoke("update:state"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
   onUpdateState: (callback) => subscribe("update:state", callback),

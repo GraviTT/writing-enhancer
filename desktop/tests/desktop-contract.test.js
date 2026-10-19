@@ -114,7 +114,8 @@ test("사이드 채팅 메시지 동작은 수정 왼쪽·AI 복사 오른쪽에
   const bubbleAppend = chatRenderer.indexOf("row.append(bubble)");
   const copyAppend = chatRenderer.indexOf("row.append(copy)");
 
-  assert.match(html, /aria-label="새 채팅" title="새 채팅"/u);
+  assert.match(html, /id="newChatButton"[^>]*aria-label="새 채팅 시작"/u);
+  assert.match(html, /<span class="icon-caption" aria-hidden="true">새 채팅<\/span>/u);
   assert.match(preload, /copyText/u);
   assert.match(main, /ipcMain\.handle\("clipboard:write"/u);
   assert.match(chatRenderer, /AI 답변을 복사했어요/u);
@@ -410,7 +411,7 @@ test("초기 단축키가 모두 점유돼도 트레이를 만든 뒤 graceful �
   assert.match(main, /shortcutWarning: shortcutStatus\.warning/u);
   assert.match(renderer, /function handlePanelState\(\{ expanded, side, shortcutWarning \}\)/u);
   assert.match(renderer, /showToast\(shortcutWarning/u);
-  assert.match(renderer, /settings\.shortcutWarning \|\| ""/u);
+  assert.match(renderer, /\[settings\.shortcutWarning, settings\.selectionShortcutWarning\]/u);
 });
 
 test("portable smoke는 ZIP을 임시 폴더에 실제 추출해 내부 실행 파일까지 부팅한다", () => {

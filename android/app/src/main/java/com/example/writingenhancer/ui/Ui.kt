@@ -90,6 +90,26 @@ object Ui {
         background = interactive(context, Color.TRANSPARENT)
     }
 
+    /** 아이콘 아래에 짧은 이름을 붙인 머리글 버튼. 비슷해 보이는 버튼(새 채팅·기록·채팅)을 이름으로 구분한다. */
+    fun labeledIconButton(context: Context, icon: UiIcon, caption: String, description: String,
+        onClick: ((View) -> Unit)? = null): Button = quietButton(context, caption, onClick).apply {
+        contentDescription = description
+        tooltipText = description
+        textSize = 10f
+        maxLines = 1
+        includeFontPadding = false
+        gravity = Gravity.CENTER
+        setTextColor(PANEL_MUTED)
+        setPadding(0, context.dp(6), 0, context.dp(4))
+        compoundDrawablePadding = context.dp(3)
+        minHeight = context.dp(52)
+        minWidth = context.dp(46)
+        setCompoundDrawables(null, UiIconDrawable(icon, PANEL_MUTED).apply {
+            setBounds(0, 0, context.dp(20), context.dp(20))
+        }, null, null)
+        background = interactive(context, Color.TRANSPARENT)
+    }
+
     fun styleSeekBar(seek: android.widget.SeekBar) {
         seek.minimumHeight = seek.context.dp(44)
         seek.progressTintList = ColorStateList.valueOf(ACCENT)

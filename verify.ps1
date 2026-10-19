@@ -138,7 +138,10 @@ try {
             "v5-01-side-chat-confirm.png",
             "v5-02-side-chat-progress.png",
             "v5-03-side-chat-source-dialog.png",
-            "v5-04-side-chat-streaming.png"
+            "v5-04-side-chat-streaming.png",
+            "v6-01-selection-options.png",
+            "v6-02-selection-result.png",
+            "v6-03-copy-offer.png"
         )) {
         $capture = Join-Path $qaDirectory $name
         if (-not (Test-Path -LiteralPath $capture) -or
@@ -146,7 +149,7 @@ try {
             throw "Expected a non-empty Windows QA capture: $name"
         }
     }
-    $verificationSummary.Add("Windows side chat confirm, progress, source dialog, and streaming QA captures: passed")
+    $verificationSummary.Add("Windows side chat, selection enhance, and copy offer QA captures: passed")
 
     $androidSdk = if ($env:ANDROID_HOME) {
         $env:ANDROID_HOME
