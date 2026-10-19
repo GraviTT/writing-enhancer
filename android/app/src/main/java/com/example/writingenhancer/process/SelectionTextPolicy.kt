@@ -48,6 +48,16 @@ object SelectionTextPolicy {
         return "${definition.value}단계 · ${definition.label} — ${definition.lengthTarget}"
     }
 
+    /** 고쳐 쓸 수 있는 선택한 글 위에 붙는 이름. */
+    fun originalLabel(characters: Int): String = "선택한 글 · ${characters}자 · 고쳐 써도 돼요"
+
+    /** 접어 둔 상황 칸을 여는 버튼 글. 상황을 골랐으면 접혀 있어도 보여 준다. */
+    fun situationToggleLabel(open: Boolean, situation: String): String = when {
+        open -> "상황 접기"
+        situation.isBlank() -> "＋ 상황 고르기 · 선택"
+        else -> "상황 ✓ ${SituationPresetPolicy.labelFor(situation)}"
+    }
+
     /** 저장해 둔 단계가 없으면 글 강화기에서 쓰던 단계를 쓴다. */
     fun initialLevel(saved: Int?, draftLevel: Int): Int =
         EnhancementLevelPolicy.normalize(saved ?: draftLevel)

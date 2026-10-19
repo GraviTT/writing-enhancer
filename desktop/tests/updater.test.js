@@ -249,3 +249,42 @@ test("Windows·Android 업데이트와 배포 작업이 같은 저장소와 파�
   assert.ok(start > main.indexOf("} else if (SMOKE_TEST) {"));
   assert.ok(main.indexOf("    startUpdateChecks();", start) > start);
 });
+
+test("같은 Electron으로 만든 앱 전용 ZIP이 있으면 전체 ZIP 대신 그것을 고른다", () => {
+  const { appAssetName } = require("../src/lib/updater");
+  const name = appAssetName("0.6.2", "37.2.6");
+  assert.equal(name, "Writing-Enhancer-0.6.2-app-electron-37.2.6.zip");
+  const withApp = release();
+  withApp.assets.push({ name, browser_download_url: `${base}${name}`, size: 150_000 });
+
+  const small = pickUpdate(withApp, "0.6.1", { runtime: "37.2.6" });
+  assert.equal(small.kind, "app");
+  assert.equal(small.zip.name, name);
+  // Electron이 다르거나 모르면 전체 ZIP을 받는다.
+  assert.equal(pickUpdate(withApp, "0.6.1", { runtime: "38.0.0" }).kind, "full");
+  assert.equal(pickUpdate(withApp, "0.6.1").zip.name, "Writing-Enhancer-0.6.2-portable.zip");
+  assert.equal(pickUpdate(withApp, "0.6.1", { runtime: "../37.2.6" }).kind, "full");
+  // 다른 곳 주소의 앱 전용 ZIP은 쓰지 않는다.
+  const foreign = release();
+  foreign.assets.push({ name, browser_download_url: `https://example.com/${name}`, size: 150_000 });
+  assert.equal(pickUpdate(foreign, "0.6.1", { runtime: "37.2.6" }).kind, "full");
+});
+
+test("앱 전용 ZIP은 빌드·배포·설치 스크립트가 같은 이름과 구조(resources/app)를 쓴다", () => {
+  const repository = path.join(__dirname, "..", "..");
+  const read = (relative) => fs.readFileSync(path.join(repository, relative), "utf8");
+  const build = read("desktop/scripts/build-policy-portable.js");
+  const workflow = read(".github/workflows/release.yml");
+  const main = read("desktop/src/main.js");
+  const { INSTALL_SCRIPT } = require("../src/lib/updater");
+  assert.match(build, /appAssetName\(packageJson\.version, electronVersion\)/u);
+  assert.match(build, /path\.join\("resources", "app"\)/u);
+  assert.match(workflow, /Writing-Enhancer-\$\{\{ needs\.plan\.outputs\.version \}\}-app-electron-\*\.zip/u);
+  assert.match(workflow, /sha256sum "Writing-Enhancer-\$\{VERSION\}-portable\.zip" "\$\{app_zip\}"/u);
+  assert.match(workflow, /"release\/\$\{app_zip\}"/u);
+  assert.match(main, /runtimeVersion: process\.versions\.electron/u);
+  // 설치 스크립트는 resources\app을 지우고 압축을 푼 내용만 덮어써, 앱 전용 ZIP도 그대로 설치한다.
+  assert.match(INSTALL_SCRIPT, /resources\\app\\package\.json/u);
+  assert.match(INSTALL_SCRIPT, /Remove-Item -LiteralPath \$appDir -Recurse -Force/u);
+  assert.match(INSTALL_SCRIPT, /robocopy\.exe \$stage \$Target \/E/u);
+});

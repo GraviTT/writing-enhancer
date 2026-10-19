@@ -141,7 +141,8 @@ try {
             "v5-04-side-chat-streaming.png",
             "v6-01-selection-options.png",
             "v6-02-selection-result.png",
-            "v6-03-copy-offer.png"
+            "v6-03-copy-offer.png",
+            "v6-04-selection-situations.png"
         )) {
         $capture = Join-Path $qaDirectory $name
         if (-not (Test-Path -LiteralPath $capture) -or

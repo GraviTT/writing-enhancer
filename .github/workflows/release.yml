@@ -71,10 +71,13 @@ jobs:
           npm test
           npm run dist
 
+      # 전체 ZIP과, 같은 Electron을 쓰는 앱이 대신 받는 앱 전용 ZIP(resources/app만)을 함께 올린다.
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: desktop/dist/Writing-Enhancer-${{ needs.plan.outputs.version }}-portable.zip
+          path: |
+            desktop/dist/Writing-Enhancer-${{ needs.plan.outputs.version }}-portable.zip
+            desktop/dist/Writing-Enhancer-${{ needs.plan.outputs.version }}-app-electron-*.zip
           if-no-files-found: error
 
   android:
@@ -168,11 +171,13 @@ jobs:
           VERSION: ${{ needs.plan.outputs.version }}
         run: |
           cd release
-          sha256sum "Writing-Enhancer-${VERSION}-portable.zip" "WritingEnhancer-${VERSION}.apk" > SHA256SUMS.txt
+          app_zip=$(ls Writing-Enhancer-${VERSION}-app-electron-*.zip)
+          sha256sum "Writing-Enhancer-${VERSION}-portable.zip" "${app_zip}" "WritingEnhancer-${VERSION}.apk" > SHA256SUMS.txt
           cat SHA256SUMS.txt
           cd ..
           gh release create "v${VERSION}" \
             "release/Writing-Enhancer-${VERSION}-portable.zip" \
+            "release/${app_zip}" \
             "release/WritingEnhancer-${VERSION}.apk" \
             "release/SHA256SUMS.txt" \
             --target "${GITHUB_SHA}" \

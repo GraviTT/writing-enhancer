@@ -39,6 +39,10 @@ function run(executable, args, cwd) {
     timeout: 30_000,
     windowsHide: true
   });
+  // 스모크 실행은 임시 폴더에 userData(writing-enhancer-smoke-v2-<pid>)를 만든다. 끝나면 지운다.
+  if (args.includes("--smoke-test") && result.pid) {
+    removeSmokeUserData(path.join(os.tmpdir(), `writing-enhancer-smoke-v2-${result.pid}`));
+  }
   return {
     exitCode: result.status,
     timedOut: Boolean(result.error?.code === "ETIMEDOUT"),
@@ -66,12 +70,23 @@ function removeDirectoryWithRetry(directory) {
   throw lastError;
 }
 
+function removeSmokeUserData(directory) {
+  const resolved = path.resolve(directory);
+  if (!resolved.startsWith(`${path.resolve(os.tmpdir())}${path.sep}writing-enhancer-smoke-v2`)) return;
+  try {
+    removeDirectoryWithRetry(resolved);
+  } catch {
+    // 백신이 아직 파일을 잡고 있으면 다음 스모크 시작 때 지운다.
+  }
+}
+
+// 이전 스모크 실행이 남긴 압축 해제 폴더와 userData 폴더(1분 넘게 지난 것)를 지운다.
 function cleanupStaleExtractionDirectories() {
   const tempDirectory = path.resolve(os.tmpdir());
-  const prefix = "writing-enhancer-archive-smoke-";
+  const prefixes = ["writing-enhancer-archive-smoke-", "writing-enhancer-smoke-v2"];
   const cutoff = Date.now() - 60_000;
   for (const entry of fs.readdirSync(tempDirectory, { withFileTypes: true })) {
-    if (!entry.isDirectory() || !entry.name.startsWith(prefix)) continue;
+    if (!entry.isDirectory() || !prefixes.some((prefix) => entry.name.startsWith(prefix))) continue;
     const candidate = path.resolve(tempDirectory, entry.name);
     if (!candidate.startsWith(`${tempDirectory}${path.sep}`)) continue;
     if (fs.statSync(candidate).mtimeMs > cutoff) continue;
@@ -89,6 +104,18 @@ const checks = {
   archiveExists: fs.existsSync(archivePath),
   archiveBytes: fs.existsSync(archivePath) ? fs.statSync(archivePath).size : 0
 };
+
+// 업데이트용 앱 전용 ZIP은 resources/app만 담아 작아야 한다.
+const appArchiveName = fs
+  .readdirSync(path.join(projectDirectory, "dist"))
+  .find((name) => name.startsWith(`Writing-Enhancer-${packageJson.version}-app-electron-`) && name.endsWith(".zip"));
+checks.appArchiveName = appArchiveName || null;
+checks.appArchiveBytes = appArchiveName
+  ? fs.statSync(path.join(projectDirectory, "dist", appArchiveName)).size
+  : 0;
+checks.appArchiveIntegrity = appArchiveName
+  ? run(sevenZip, ["t", path.join(projectDirectory, "dist", appArchiveName)], projectDirectory)
+  : null;
 
 checks.archiveIntegrity =
   checks.archiveExists && checks.archiveBytes > 1_000_000
@@ -160,6 +187,9 @@ checks.ok =
   checks.packagedAppExists &&
   checks.archiveExists &&
   checks.archiveBytes > 1_000_000 &&
+  checks.appArchiveBytes > 10_000 &&
+  checks.appArchiveBytes < 5_000_000 &&
+  checks.appArchiveIntegrity?.exitCode === 0 &&
   checks.archiveIntegrity?.exitCode === 0 &&
   checks.archiveExtraction?.exitCode === 0 &&
   checks.archiveExtractedLauncher?.exitCode === 0 &&

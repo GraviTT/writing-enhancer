@@ -1,6 +1,6 @@
 {
   "$comment": "글 강화(원문 다듬기)에 Windows·Android가 함께 쓰는 규칙. 고친 뒤 shared 폴더에서 npm run rules를 실행한다.",
-  "version": 1,
+  "version": 2,
   "speechLevel": {
     "enhance": [
       "말투 맞추기:",
@@ -14,6 +14,7 @@
   },
   "selection": {
     "levelShortLabels": ["요약", "간결", "충실", "보완", "확장"],
+    "limits": { "maxSituations": 12, "maxSituationLabel": 10, "maxSituationText": 200 },
     "situations": [
       { "label": "메신저 답장", "text": "메신저로 보내는 답장" },
       { "label": "업무 메일", "text": "업무 메일" },

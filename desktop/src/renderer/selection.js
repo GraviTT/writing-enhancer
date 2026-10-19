@@ -1,15 +1,17 @@
 "use strict";
 
 // 다른 프로그램에서 선택하거나 복사한 글을 강화하는 화면.
-// 강화 단계와 상황을 고른 뒤 강화하고, 결과를 원래 자리에 바꿔 넣거나 복사한다.
+// 가져온 글을 필요하면 고친 뒤 강화 단계와 상황(접어 둔 칸)을 골라 강화하고,
+// 결과를 원래 자리에 바꿔 넣거나 복사한다. 상황 버튼은 사용자가 저장·삭제할 수 있다.
 // 쓰던 글 강화기 작업은 건드리지 않고, 결과는 기록에 따로 남긴다.
 (function setupSelectionPanel() {
   const api = window.writingEnhancer;
   const levels = window.enhancementLevels;
   const rules = window.writingRules;
+  const presets = window.situationPresets;
   const panel = () => window.writingPanel;
   const STORAGE_KEY = "writing-enhancer.selection-level";
-  const ORIGINAL_PREVIEW_CHARACTERS = 220;
+  const ORIGINAL_MAX_HEIGHT = 168;
 
   const $ = (id) => document.querySelector(`#${id}`);
   const el = {
@@ -17,12 +19,17 @@
     back: $("selectionBackButton"),
     source: $("selectionSource"),
     original: $("selectionOriginal"),
-    originalToggle: $("selectionOriginalToggle"),
     options: $("selectionOptions"),
     levels: $("selectionLevels"),
     levelHint: $("selectionLevelHint"),
+    situationToggle: $("selectionSituationToggle"),
+    situationSection: $("selectionSituationSection"),
     situations: $("selectionSituations"),
     situationInput: $("selectionSituationInput"),
+    situationSave: $("situationSaveButton"),
+    situationEdit: $("situationEditButton"),
+    situationReset: $("situationResetButton"),
+    situationHint: $("situationEditHint"),
     enhance: $("selectionEnhanceButton"),
     loading: $("selectionLoading"),
     result: $("selectionResult"),
@@ -51,7 +58,9 @@
     versions: [],
     historyId: "",
     previousView: "input",
-    showingOriginal: false
+    situations: presets.defaults(),
+    customized: false,
+    editingSituations: false
   };
 
   function loadLevel() {
@@ -81,7 +90,36 @@
     el.result.classList.toggle("is-hidden", part !== "result");
   }
 
-  // ── 강화 단계·상황 ──────────────────────────────────────
+  // ── 선택한 글(고쳐 쓸 수 있음) ──────────────────────────
+
+  function currentInput() {
+    return el.original.value.trim();
+  }
+
+  function sourceText() {
+    const count = `${currentInput().length.toLocaleString("ko-KR")}자`;
+    const origin = state.targetLabel
+      ? `${state.targetLabel}에서 가져온 글`
+      : state.source === "clipboard"
+        ? "복사한 글"
+        : state.source === "context-menu"
+          ? "글 강화기에서 선택한 글"
+          : "선택한 글";
+    return `${origin} · ${count} · 고쳐 써도 돼요`;
+  }
+
+  function growOriginal() {
+    el.original.style.height = "auto";
+    el.original.style.height = `${Math.min(el.original.scrollHeight + 2, ORIGINAL_MAX_HEIGHT)}px`;
+  }
+
+  function syncOriginal() {
+    el.source.textContent = sourceText();
+    el.enhance.disabled = !currentInput();
+    growOriginal();
+  }
+
+  // ── 강화 단계 ───────────────────────────────────────────
 
   function renderLevels() {
     el.levels.replaceChildren();
@@ -116,54 +154,142 @@
     saveLevel();
   }
 
+  // ── 상황(접어 두고, 버튼은 사용자가 고친다) ─────────────
+
+  function situationValue() {
+    return presets.clean(el.situationInput.value, presets.limits.maxSituationText);
+  }
+
+  function setSituationOpen(open) {
+    el.situationSection.classList.toggle("is-hidden", !open);
+    el.situationToggle.setAttribute("aria-expanded", String(open));
+    if (!open && state.editingSituations) setEditing(false);
+    renderSituationToggle();
+  }
+
+  function renderSituationToggle() {
+    const open = el.situationToggle.getAttribute("aria-expanded") === "true";
+    const value = situationValue();
+    el.situationToggle.textContent = open
+      ? "상황 접기"
+      : value
+        ? `상황 ✓ ${presets.labelFor(value)}`
+        : "＋ 상황 고르기 · 선택";
+    el.situationToggle.title = value ? `상황: ${value}` : "받는 사람이나 글의 쓰임을 고르면 더 잘 맞춰 써요";
+  }
+
   function renderSituations() {
     el.situations.replaceChildren();
-    for (const situation of rules.selection.situations) {
+    const value = situationValue();
+    for (const situation of state.situations) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "situation-chip";
-      chip.textContent = situation.label;
-      chip.title = situation.text;
+      chip.textContent = state.editingSituations ? `${situation.label} ×` : situation.label;
+      chip.title = state.editingSituations ? `${situation.text} · 눌러서 지우기` : situation.text;
       chip.dataset.text = situation.text;
-      chip.setAttribute("aria-pressed", "false");
+      const chosen = !state.editingSituations && situation.text === value;
+      chip.classList.toggle("is-selected", chosen);
+      chip.classList.toggle("is-removable", state.editingSituations);
+      chip.setAttribute("aria-pressed", String(chosen));
       chip.addEventListener("click", () => {
-        const chosen = el.situationInput.value.trim() === situation.text;
-        el.situationInput.value = chosen ? "" : situation.text;
-        syncSituationChips();
+        if (state.editingSituations) {
+          removeSituation(situation);
+          return;
+        }
+        el.situationInput.value = situation.text === situationValue() ? "" : situation.text;
+        syncSituation();
       });
       el.situations.append(chip);
     }
+    if (state.situations.length === 0) {
+      const empty = document.createElement("span");
+      empty.className = "situation-empty";
+      empty.textContent = "저장한 상황 버튼이 없어요. 아래 칸에 상황을 쓰고 저장해 보세요.";
+      el.situations.append(empty);
+    }
+    renderSituationTools();
   }
 
-  function syncSituationChips() {
-    const value = el.situationInput.value.trim();
-    for (const chip of el.situations.children) {
-      const chosen = chip.dataset.text === value;
+  function renderSituationTools() {
+    const value = situationValue();
+    const saved = state.situations.some((item) => item.text === value);
+    const full = state.situations.length >= presets.limits.maxSituations;
+    el.situationSave.disabled = !value || saved || full;
+    el.situationSave.title = full
+      ? `상황 버튼은 ${presets.limits.maxSituations}개까지 둘 수 있어요. 편집에서 하나를 지워 주세요.`
+      : saved
+        ? "이미 버튼으로 있는 상황이에요."
+        : "지금 쓴 상황을 다음에도 누를 수 있게 버튼으로 남겨요";
+    el.situationEdit.textContent = state.editingSituations ? "편집 끝내기" : "버튼 편집";
+    el.situationEdit.setAttribute("aria-pressed", String(state.editingSituations));
+    el.situationReset.classList.toggle("is-hidden", !state.editingSituations || !state.customized);
+    el.situationHint.classList.toggle("is-hidden", !state.editingSituations);
+  }
+
+  function syncSituation() {
+    for (const chip of el.situations.querySelectorAll(".situation-chip")) {
+      const chosen = !state.editingSituations && chip.dataset.text === situationValue();
       chip.classList.toggle("is-selected", chosen);
       chip.setAttribute("aria-pressed", String(chosen));
     }
+    renderSituationTools();
+    renderSituationToggle();
+  }
+
+  function setEditing(editing) {
+    state.editingSituations = editing;
+    renderSituations();
+  }
+
+  async function applySituations(response) {
+    if (!response?.situations) return;
+    state.situations = response.situations;
+    state.customized = response.customized === true;
+    renderSituations();
+  }
+
+  async function loadSituations() {
+    try {
+      await applySituations(await api.getSituationPresets());
+    } catch {
+      // 저장한 목록을 못 읽으면 기본 목록을 그대로 쓴다.
+    }
+  }
+
+  async function saveCurrentSituation() {
+    const result = presets.add(state.situations, situationValue());
+    if (!result.added) {
+      const messages = {
+        empty: "버튼으로 저장할 상황을 먼저 써 주세요.",
+        duplicate: "이미 버튼으로 있는 상황이에요.",
+        full: `상황 버튼은 ${presets.limits.maxSituations}개까지 둘 수 있어요. 편집에서 하나를 지워 주세요.`
+      };
+      panel().showToast(messages[result.reason] || "버튼으로 저장하지 못했어요.");
+      return;
+    }
+    await applySituations(await api.saveSituationPresets(result.list));
+    syncSituation();
+    panel().showToast(`'${presets.labelFor(situationValue())}' 상황 버튼을 저장했어요.`);
+  }
+
+  async function removeSituation(situation) {
+    const before = state.situations.map((item) => ({ ...item }));
+    await applySituations(await api.saveSituationPresets(presets.remove(state.situations, situation.text)));
+    panel().showToast(`'${situation.label}' 버튼을 지웠어요.`, {
+      actionLabel: "되돌리기",
+      onAction: async () => {
+        await applySituations(await api.saveSituationPresets(before));
+      }
+    });
+  }
+
+  async function resetSituations() {
+    await applySituations(await api.resetSituationPresets());
+    panel().showToast("상황 버튼을 처음 목록으로 되돌렸어요.");
   }
 
   // ── 열기·닫기 ───────────────────────────────────────────
-
-  function sourceText() {
-    const count = `${state.text.length.toLocaleString("ko-KR")}자`;
-    if (state.targetLabel) return `${state.targetLabel}에서 가져온 글 · ${count}`;
-    if (state.source === "clipboard") return `복사한 글 · ${count}`;
-    if (state.source === "context-menu") return `글 강화기에서 선택한 글 · ${count}`;
-    return `선택한 글 · ${count}`;
-  }
-
-  function renderOriginal() {
-    const long = state.text.length > ORIGINAL_PREVIEW_CHARACTERS;
-    el.original.textContent =
-      long && !state.showingOriginal
-        ? `${state.text.slice(0, ORIGINAL_PREVIEW_CHARACTERS).trimEnd()}…`
-        : state.text;
-    el.originalToggle.classList.toggle("is-hidden", !long);
-    el.originalToggle.textContent = state.showingOriginal ? "접기" : "전체 보기";
-    el.originalToggle.setAttribute("aria-expanded", String(state.showingOriginal));
-  }
 
   function renderReplaceButton() {
     el.replace.classList.toggle("is-hidden", !state.canReplace);
@@ -189,18 +315,20 @@
       busy: false,
       versions: [],
       historyId: "",
-      showingOriginal: false
+      editingSituations: false
     });
     hideOffer();
-    el.source.textContent = sourceText();
-    renderOriginal();
+    el.original.value = text;
     el.situationInput.value = "";
-    syncSituationChips();
+    setSituationOpen(false);
+    renderSituations();
     setLevel(state.level);
     renderReplaceButton();
     show("options");
     panel().showSurface("writing");
     panel().setView("selection");
+    syncOriginal();
+    loadSituations();
     window.setTimeout(focus, 60);
   }
 
@@ -227,13 +355,25 @@
 
   async function enhance() {
     if (state.busy) return;
+    const input = currentInput();
+    if (!input) {
+      panel().showToast("강화할 글이 비어 있어요.");
+      el.original.focus();
+      return;
+    }
+    // 고친 글로 바꿨다면 이전 결과와 다른 작업으로 기록한다.
+    if (input !== state.text) {
+      state.text = input;
+      state.versions = [];
+      state.historyId = "";
+    }
     const requestId = ++state.requestId;
-    const situation = el.situationInput.value.trim();
+    const situation = situationValue();
     const enhancementLevel = state.level;
     state.busy = true;
     show("loading");
     const response = await api.enhance({
-      input: state.text,
+      input,
       situation,
       enhancementLevel,
       followUpMode: "first",
@@ -370,8 +510,10 @@
 
   loadLevel();
   renderLevels();
-  renderSituations();
   setLevel(state.level);
+  renderSituations();
+  renderSituationToggle();
+  loadSituations();
 
   el.levels.addEventListener("keydown", (event) => {
     const step = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 }[event.key];
@@ -379,17 +521,24 @@
     event.preventDefault();
     setLevel(state.level + step, { focus: true });
   });
-  el.situationInput.addEventListener("input", syncSituationChips);
-  el.situationInput.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-      event.preventDefault();
-      enhance();
-    }
+  el.original.addEventListener("input", syncOriginal);
+  el.situationToggle.addEventListener("click", () => {
+    const open = el.situationSection.classList.contains("is-hidden");
+    setSituationOpen(open);
+    if (open) el.situationInput.focus();
   });
-  el.originalToggle.addEventListener("click", () => {
-    state.showingOriginal = !state.showingOriginal;
-    renderOriginal();
-  });
+  el.situationInput.addEventListener("input", syncSituation);
+  for (const field of [el.original, el.situationInput]) {
+    field.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        enhance();
+      }
+    });
+  }
+  el.situationSave.addEventListener("click", saveCurrentSituation);
+  el.situationEdit.addEventListener("click", () => setEditing(!state.editingSituations));
+  el.situationReset.addEventListener("click", resetSituations);
   el.back.addEventListener("click", close);
   el.enhance.addEventListener("click", enhance);
   el.again.addEventListener("click", enhance);
@@ -397,10 +546,11 @@
     const latest = state.versions.at(-1);
     if (latest) {
       el.situationInput.value = latest.situation;
-      syncSituationChips();
       setLevel(latest.enhancementLevel);
     }
     show("options");
+    setSituationOpen(Boolean(latest?.situation));
+    syncSituation();
     el.enhance.focus();
   });
   el.replace.addEventListener("click", replace);
@@ -436,8 +586,11 @@
         canReplace: true,
         source: "shortcut"
       });
-      el.situationInput.value = "메신저로 보내는 답장";
-      syncSituationChips();
+      if (stage === "situations") {
+        el.situationInput.value = "메신저로 보내는 답장";
+        setSituationOpen(true);
+        syncSituation();
+      }
       if (stage === "result") {
         const version = {
           completedText: "내일 회의 자료를 아직 못 만들었어. 오늘 밤까지 정리해서 꼭 보내 줄게. 늦어져서 미안해.",

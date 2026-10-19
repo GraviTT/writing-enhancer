@@ -608,6 +608,7 @@ async function captureQaScreens() {
   };
   await captureSelection('window.selectionPanel?.showDemo("options")', "v6-01-selection-options.png");
   await captureSelection('window.selectionPanel?.showDemo("result")', "v6-02-selection-result.png");
+  await captureSelection('window.selectionPanel?.showDemo("situations")', "v6-04-selection-situations.png");
   await captureSelection(
     'window.selectionPanel?.close(); document.querySelector("#copyOfferPreview").textContent = "내일 회의 자료 아직 못 만들었어. 오늘 밤까지 정리해서… · 41자"; document.querySelector("#copyOffer").classList.remove("is-hidden")',
     "v6-03-copy-offer.png"
@@ -998,6 +999,8 @@ function startUpdateChecks() {
   const directory = updatableInstall({ execPath: process.execPath, isPackaged: app.isPackaged });
   updateManager = new UpdateManager({
     currentVersion: app.getVersion(),
+    // 같은 Electron으로 만든 앱 전용 ZIP이 있으면 전체 ZIP 대신 그것만 받는다.
+    runtimeVersion: process.versions.electron,
     fetchImpl: (url, options) => globalThis.fetch(url, options),
     tempDirectory: app.getPath("temp"),
     install: directory ? { directory, execPath: process.execPath, pid: process.pid } : null,
@@ -1546,6 +1549,10 @@ function registerIpcHandlers() {
     memoryCount: memoryStore.list().length,
     ...shortcutSettings()
   }));
+  ipcMain.handle("selection:get-situations", () => configStore.getSituationPresets());
+  ipcMain.handle("selection:save-situations", (_event, request) =>
+    configStore.saveSituationPresets(request?.reset === true ? null : request?.situations)
+  );
   ipcMain.handle("selection:use-copied", () => useCopiedText());
   ipcMain.handle("selection:replace", (_event, request) => replaceSelection(request));
   ipcMain.handle("selection:copy", (_event, request) => {

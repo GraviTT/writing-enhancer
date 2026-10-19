@@ -2,6 +2,8 @@
 
 // GitHub 릴리스에서 새 버전을 확인하고, 휴대용 ZIP을 받아 SHA-256을 맞춰 본 뒤
 // 앱을 닫고 같은 폴더의 파일을 바꿔 다시 실행한다. 기록·설정은 앱 폴더 밖(userData)에 있어 그대로 남는다.
+// 지금 쓰는 Electron과 같은 버전으로 만든 "앱 파일만 든 ZIP"(수백 KB)이 있으면 그것을 받고,
+// 없을 때만 Electron까지 든 전체 ZIP(약 120MB)을 받는다.
 // Android(AppUpdatePolicy.kt)와 같은 릴리스·파일 이름 규칙을 쓴다.
 
 const crypto = require("node:crypto");
@@ -18,6 +20,7 @@ const MAX_ZIP_BYTES = 400 * 1024 * 1024;
 const FIRST_CHECK_MS = 15_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const VERSION = /^v?(\d+)\.(\d+)\.(\d+)$/u;
+const RUNTIME_VERSION = /^\d+\.\d+\.\d+$/u;
 const CHECKSUM_LINE = /^([0-9a-f]{64})\s+\*?(\S+)$/iu;
 
 function parseVersion(value) {
@@ -39,6 +42,11 @@ function windowsAssetName(version) {
   return `Writing-Enhancer-${version}-portable.zip`;
 }
 
+/** Electron을 빼고 resources/app만 담은 ZIP. 만든 Electron 버전이 이름에 들어 있어 같은 런타임에서만 쓴다. */
+function appAssetName(version, electronVersion) {
+  return `Writing-Enhancer-${version}-app-electron-${electronVersion}.zip`;
+}
+
 function isTrustedDownload(url) {
   return typeof url === "string" && url.startsWith(DOWNLOAD_PREFIX);
 }
@@ -53,7 +61,8 @@ function parseChecksums(text) {
 }
 
 // GitHub `releases/latest` 응답에서 지금보다 새 버전의 Windows ZIP과 검사 파일을 고른다.
-function pickUpdate(release, currentVersion) {
+// runtime(지금 Electron 버전)과 같은 앱 전용 ZIP이 있으면 그것을, 없으면 전체 ZIP을 고른다.
+function pickUpdate(release, currentVersion, { runtime = "" } = {}) {
   if (!release || release.draft || release.prerelease) return null;
   const version = String(release.tag_name ?? "").replace(/^v/u, "");
   if (!isNewer(version, currentVersion)) return null;
@@ -64,19 +73,30 @@ function pickUpdate(release, currentVersion) {
       size: Number(asset?.size) || 0
     }))
     .filter((asset) => isTrustedDownload(asset.url));
-  const zip = assets.find((asset) => asset.name === windowsAssetName(version));
+  const usable = (asset) => Boolean(asset) && asset.size > 0 && asset.size <= MAX_ZIP_BYTES;
+  const full = assets.find((asset) => asset.name === windowsAssetName(version));
+  const app = RUNTIME_VERSION.test(String(runtime))
+    ? assets.find((asset) => asset.name === appAssetName(version, runtime))
+    : null;
   const checksums = assets.find((asset) => asset.name === CHECKSUM_ASSET);
-  if (!zip || !checksums || zip.size <= 0 || zip.size > MAX_ZIP_BYTES) return null;
-  return { version, zip, checksums, pageUrl: String(release.html_url ?? "") };
+  const zip = usable(app) ? app : usable(full) ? full : null;
+  if (!zip || !checksums) return null;
+  return {
+    version,
+    zip,
+    kind: zip === app ? "app" : "full",
+    checksums,
+    pageUrl: String(release.html_url ?? "")
+  };
 }
 
-async function checkForUpdate({ fetchImpl, currentVersion, userAgent }) {
+async function checkForUpdate({ fetchImpl, currentVersion, userAgent, runtime = "" }) {
   const response = await fetchImpl(LATEST_RELEASE_URL, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": userAgent }
   });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`업데이트 정보를 받지 못했어요 (${response.status}).`);
-  return pickUpdate(await response.json(), currentVersion);
+  return pickUpdate(await response.json(), currentVersion, { runtime });
 }
 
 async function downloadUpdate(update, { fetchImpl, directory, userAgent, onProgress }) {
@@ -214,6 +234,7 @@ function launchInstaller({ zipPath, target, execPath, pid, spawnImpl = spawn }) 
 class UpdateManager {
   constructor({
     currentVersion,
+    runtimeVersion = "",
     fetchImpl,
     tempDirectory,
     install,
@@ -224,6 +245,7 @@ class UpdateManager {
     timers = { setTimeout, setInterval, clearTimeout, clearInterval }
   }) {
     this.currentVersion = currentVersion;
+    this.runtimeVersion = runtimeVersion;
     this.fetchImpl = fetchImpl;
     this.directory = path.join(tempDirectory, "writing-enhancer-update");
     this.installTarget = install;
@@ -268,7 +290,8 @@ class UpdateManager {
       const update = await checkForUpdate({
         fetchImpl: this.fetchImpl,
         currentVersion: this.currentVersion,
-        userAgent: this.userAgent
+        userAgent: this.userAgent,
+        runtime: this.runtimeVersion
       });
       if (!update) return null;
       this.update = update;
@@ -322,8 +345,10 @@ class UpdateManager {
 
 module.exports = {
   CHECKSUM_ASSET,
+  INSTALL_SCRIPT,
   LATEST_RELEASE_URL,
   UpdateManager,
+  appAssetName,
   checkForUpdate,
   downloadUpdate,
   isNewer,

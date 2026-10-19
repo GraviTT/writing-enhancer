@@ -587,13 +587,19 @@ function validateWritingRules(writing) {
   }
   const shortLabels = writing.selection?.levelShortLabels;
   if (!Array.isArray(shortLabels) || shortLabels.length !== 5) fail("levelShortLabels는 5단계 이름이어야 합니다.");
+  const limits = writing.selection?.limits || {};
+  for (const name of ["maxSituations", "maxSituationLabel", "maxSituationText"]) {
+    if (!Number.isInteger(limits[name]) || limits[name] <= 0) fail(`limits.${name}는 양의 정수여야 합니다.`);
+  }
   const situations = writing.selection?.situations;
   if (!Array.isArray(situations) || situations.length === 0) fail("situations가 비어 있습니다.");
+  if (situations.length > limits.maxSituations) fail("기본 상황 수가 maxSituations보다 많습니다.");
   const labels = new Set();
   for (const situation of situations) {
     if (typeof situation?.label !== "string" || !situation.label.trim()) fail("상황 이름이 비어 있습니다.");
     if ([...situation.label].length > 6) fail(`상황 이름은 6자 이하여야 합니다: ${situation.label}`);
     if (typeof situation.text !== "string" || !situation.text.trim()) fail(`상황 설명이 비어 있습니다: ${situation.label}`);
+    if ([...situation.text].length > limits.maxSituationText) fail(`상황 설명이 너무 깁니다: ${situation.label}`);
     if (labels.has(situation.label)) fail(`상황 이름이 겹칩니다: ${situation.label}`);
     labels.add(situation.label);
   }
@@ -644,6 +650,11 @@ object SharedWritingRules {
     const val VERSION = ${data.version}
     const val ENHANCE_SPEECH_LEVEL = ${kt(data.speechLevel.enhance)}
     const val GUESS_SPEECH_LEVEL = ${kt(data.speechLevel.guess)}
+
+    // 사용자가 바꿀 수 있는 상황 버튼의 개수·이름·설명 길이 한도
+    const val MAX_SITUATIONS = ${data.selection.limits.maxSituations}
+    const val MAX_SITUATION_LABEL = ${data.selection.limits.maxSituationLabel}
+    const val MAX_SITUATION_TEXT = ${data.selection.limits.maxSituationText}
 
     val LEVEL_SHORT_LABELS: List<String> = ${ktStrings(data.selection.levelShortLabels)}
 

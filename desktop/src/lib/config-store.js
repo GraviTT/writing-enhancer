@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const situationPresets = require("../renderer/situation-presets");
 
 const DEFAULTS = Object.freeze({
   shortcut: "CommandOrControl+Shift+Space",
@@ -69,6 +70,10 @@ class ConfigStore {
           expanded: normalizePlacement(parsed?.placements?.expanded),
           collapsed: normalizePlacement(parsed?.placements?.collapsed)
         },
+        // 사용자가 고친 상황 버튼 목록. 고친 적이 없으면 null이고 기본 목록을 쓴다.
+        situationPresets: Array.isArray(parsed?.situationPresets)
+          ? situationPresets.normalize(parsed.situationPresets)
+          : null,
         secrets: parsed.secrets && typeof parsed.secrets === "object" ? parsed.secrets : {}
       };
     } catch {
@@ -97,6 +102,22 @@ class ConfigStore {
       geminiFromEnvironment: Boolean(process.env.GEMINI_API_KEY),
       encryptionAvailable: this.safeStorage.isEncryptionAvailable()
     };
+  }
+
+  /** 선택한 글 강화 화면의 상황 버튼. customized가 false면 기본 목록이다. */
+  getSituationPresets() {
+    const stored = this.data.situationPresets;
+    return {
+      situations: situationPresets.normalize(Array.isArray(stored) ? stored : null),
+      customized: Array.isArray(stored)
+    };
+  }
+
+  /** null을 주면 기본 목록으로 되돌린다. */
+  saveSituationPresets(list) {
+    this.data.situationPresets = Array.isArray(list) ? situationPresets.normalize(list) : null;
+    this.#write();
+    return this.getSituationPresets();
   }
 
   getShortcut() {

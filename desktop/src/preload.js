@@ -80,6 +80,10 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
   useCopiedText: () => ipcRenderer.invoke("selection:use-copied"),
   replaceSelection: (payload) => ipcRenderer.invoke("selection:replace", payload),
   copySelectionResult: (text) => ipcRenderer.invoke("selection:copy", { text }),
+  getSituationPresets: () => ipcRenderer.invoke("selection:get-situations"),
+  saveSituationPresets: (situations) =>
+    ipcRenderer.invoke("selection:save-situations", { situations }),
+  resetSituationPresets: () => ipcRenderer.invoke("selection:save-situations", { reset: true }),
   onSelectionOpen: (callback) => subscribe("selection:open", callback),
   onSelectionEmpty: (callback) => subscribe("selection:empty", callback),
   onSelectionOffer: (callback) => subscribe("selection:offer", callback),

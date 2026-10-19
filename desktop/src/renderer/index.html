@@ -220,18 +220,25 @@
               <span class="selection-title">선택한 글 강화</span>
             </div>
             <div class="selection-original">
-              <span id="selectionSource" class="selection-source"></span>
-              <p id="selectionOriginal" class="selection-original-text"></p>
-              <button id="selectionOriginalToggle" class="raw-original-toggle is-hidden" type="button" aria-expanded="false">전체 보기</button>
+              <label id="selectionSource" class="selection-source" for="selectionOriginal"></label>
+              <textarea id="selectionOriginal" class="selection-original-text" rows="3" maxlength="12000" spellcheck="true" title="강화하기 전에 고쳐 써도 돼요"></textarea>
             </div>
 
             <div id="selectionOptions" class="selection-options">
               <div class="selection-field-title">강화 단계</div>
               <div id="selectionLevels" class="level-segments" role="radiogroup" aria-label="강화 단계"></div>
               <p id="selectionLevelHint" class="selection-hint"></p>
-              <div class="selection-field-title">상황 <span>고르거나 직접 써도 돼요 · 선택</span></div>
-              <div id="selectionSituations" class="situation-chips" role="group" aria-label="자주 쓰는 상황"></div>
-              <textarea id="selectionSituationInput" class="selection-situation-input" rows="2" maxlength="2000" placeholder="직접 입력 · 예: 친구에게 보내는 생일 축하"></textarea>
+              <button id="selectionSituationToggle" class="compact-toggle selection-situation-toggle" type="button" aria-expanded="false" aria-controls="selectionSituationSection">＋ 상황 고르기 · 선택</button>
+              <div id="selectionSituationSection" class="selection-situation-section is-hidden">
+                <div id="selectionSituations" class="situation-chips" role="group" aria-label="자주 쓰는 상황"></div>
+                <textarea id="selectionSituationInput" class="selection-situation-input" rows="2" maxlength="200" placeholder="직접 입력 · 예: 친구에게 보내는 생일 축하"></textarea>
+                <div class="situation-tools">
+                  <button id="situationSaveButton" class="mini-button" type="button" title="지금 쓴 상황을 다음에도 누를 수 있게 버튼으로 남겨요">＋ 버튼으로 저장</button>
+                  <button id="situationEditButton" class="mini-button" type="button" aria-pressed="false" title="필요 없는 상황 버튼을 지워요">버튼 편집</button>
+                  <button id="situationResetButton" class="mini-button is-hidden" type="button" title="상황 버튼을 처음 목록으로 되돌려요">기본값으로</button>
+                </div>
+                <p id="situationEditHint" class="selection-hint is-hidden">지울 버튼을 누르세요. 새 버튼은 위 칸에 상황을 쓰고 [＋ 버튼으로 저장]을 눌러요.</p>
+              </div>
               <button id="selectionEnhanceButton" class="primary-button" type="button">
                 <span>강화하기</span>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>
@@ -515,6 +522,7 @@
     <script src="./visual-crop.js"></script>
     <script src="./side-chat-rules.js"></script>
     <script src="./writing-rules.js"></script>
+    <script src="./situation-presets.js"></script>
     <script src="./side-chat-text.js"></script>
     <script src="./chat-answer.js"></script>
     <script src="./renderer.js"></script>
