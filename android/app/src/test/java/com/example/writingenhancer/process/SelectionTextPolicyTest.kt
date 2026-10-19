@@ -52,6 +52,28 @@ class SelectionTextPolicyTest {
     }
 
     @Test
+    fun foreignTextOpensInTranslationMode() {
+        assertTrue(SelectionTextPolicy.suggestsTranslation("Your order has shipped!"))
+        assertTrue(SelectionTextPolicy.suggestsTranslation("今日はいい天気ですね"))
+        assertFalse(SelectionTextPolicy.suggestsTranslation("내일 회의 자료 보내 줄게"))
+        assertFalse(SelectionTextPolicy.suggestsTranslation("API 키 확인"))
+        assertFalse(SelectionTextPolicy.suggestsTranslation("ok"))
+        assertTrue(SelectionTextPolicy.suggestsTranslation("안녕하세요", "en"))
+        assertFalse(SelectionTextPolicy.suggestsTranslation("Hello", "ko"))
+    }
+
+    @Test
+    fun screenTextLabelsAndTranslationSummaries() {
+        assertEquals(
+            "화면에서 읽은 글 · 영어 · 114자 · 고쳐 써도 돼요",
+            SelectionTextPolicy.originalLabel(114, fromScreen = true, languageName = "영어"),
+        )
+        assertEquals("번역 · 한국어", SelectionTextPolicy.translationSummary("한국어", " "))
+        assertEquals("번역 · 영어 · 업무 메일", SelectionTextPolicy.translationSummary("영어", "업무 메일"))
+        assertEquals("번역 → 한국어", SelectionTextPolicy.translationHistorySituation("한국어", ""))
+    }
+
+    @Test
     fun savedLevelWinsOverTheWritingDraftLevel() {
         assertEquals(2, SelectionTextPolicy.initialLevel(saved = 2, draftLevel = 4))
         assertEquals(4, SelectionTextPolicy.initialLevel(saved = null, draftLevel = 4))

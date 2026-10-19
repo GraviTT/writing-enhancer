@@ -49,7 +49,10 @@ test("사이드 채팅은 글 강화기 창 안의 화면으로 별도 대화 �
   const chatRenderer = read("src/renderer/side-chat.js");
   assert.match(main, /function showChatSurface\(/u);
   assert.doesNotMatch(main, /side-chat\.html/u);
-  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 1);
+  // 글 강화기 창은 하나다. 다른 창은 화면에서 읽을 부분을 고를 때 잠깐 뜨는 창뿐이다.
+  assert.equal((main.match(/mainWindow = new BrowserWindow\(/gu) || []).length, 1);
+  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 2);
+  assert.match(main, /const picker = new BrowserWindow\(/u);
   assert.match(html, /id="chatSurface"/u);
   assert.match(main, /new SideChatStore/u);
   assert.match(main, /side-chat:send/u);
@@ -319,7 +322,10 @@ test("사이드 채팅과 글 강화기는 한 창 안에서 전환되고 바깥
   const html = read("src/renderer/index.html");
   const renderer = read("src/renderer/renderer.js");
   const chat = read("src/renderer/side-chat.js");
-  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 1);
+  // 글 강화기 창은 하나다. 다른 창은 화면에서 읽을 부분을 고를 때 잠깐 뜨는 창뿐이다.
+  assert.equal((main.match(/mainWindow = new BrowserWindow\(/gu) || []).length, 1);
+  assert.equal((main.match(/new BrowserWindow\(/gu) || []).length, 2);
+  assert.match(main, /const picker = new BrowserWindow\(/u);
   assert.doesNotMatch(main, /sideChatWindow|side-chat:minimize|side-chat:drag-move/u);
   assert.match(main, /mainWindow\.on\("blur"/u);
   assert.match(main, /"panel:surface"/u);

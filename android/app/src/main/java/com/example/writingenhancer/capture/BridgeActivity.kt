@@ -34,6 +34,13 @@ class BridgeActivity : Activity() {
         target = intent.getStringExtra(EXTRA_TARGET) ?: TARGET_RAW
         externalLaunched = savedInstanceState?.getBoolean(STATE_EXTERNAL_LAUNCHED) == true
         if (externalLaunched) return
+        if (operation == ACTION_CAPTURE_SCREEN && target == TARGET_READ_TEXT) {
+            // 알림의 "화면 글 읽기"에서 바로 열렸을 수 있으니, 버블과 패널을 숨겨 캡처에 찍히지 않게 한다.
+            OverlayService.startIfMarkedRunning(
+                this,
+                Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_PREPARE_SCREEN_READ),
+            )
+        }
         runCatching {
             when (operation) {
                 ACTION_PICK_ATTACHMENT -> launchPicker()
@@ -328,6 +335,8 @@ class BridgeActivity : Activity() {
         const val TARGET_ANSWER = "answer"
         const val TARGET_SIDE_CHAT_SCREEN = "side_chat_screen"
         const val TARGET_SIDE_CHAT_VISUAL = "side_chat_visual"
+        // 드래그할 수 없는 글을 화면에서 읽는다(캡처 → 읽을 부분 고르기 → 글 강화 창).
+        const val TARGET_READ_TEXT = "read_text"
         const val ATTACHMENT_DIRECTORY = "attachments"
         const val SIDE_CHAT_CAPTURE_DIRECTORY = "side-chat-captures"
 

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src data:; style-src 'self'; script-src 'self'"
+    />
+    <title>읽을 부분 고르기</title>
+    <link rel="stylesheet" href="./screen-select.css" />
+  </head>
+  <body>
+    <img id="shot" alt="" draggable="false" />
+    <div id="shade"></div>
+    <div id="box" class="is-hidden"></div>
+    <div id="hint" role="status">읽을 부분을 드래그하세요 · Enter 화면 전체 · Esc 취소</div>
+    <script src="./screen-select.js"></script>
+  </body>
+</html>

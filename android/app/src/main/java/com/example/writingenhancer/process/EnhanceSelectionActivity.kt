@@ -30,8 +30,11 @@ import com.example.writingenhancer.ai.EnhancementRequest
 import com.example.writingenhancer.ai.EnhancementResult
 import com.example.writingenhancer.ai.FollowUpMode
 import com.example.writingenhancer.ai.MissingApiKeyException
+import com.example.writingenhancer.ai.ScreenTextPolicy
 import com.example.writingenhancer.ai.SharedWritingRules
+import com.example.writingenhancer.ai.TranslationResult
 import com.example.writingenhancer.capture.BridgeActivity
+import com.example.writingenhancer.capture.ScreenReadFiles
 import com.example.writingenhancer.data.WorkspacePolicy
 import com.example.writingenhancer.data.WorkspaceStore
 import com.example.writingenhancer.memory.MemoryStore
@@ -57,6 +60,11 @@ class EnhanceSelectionActivity : Activity() {
     private lateinit var originalLabel: TextView
     private lateinit var original: EditText
     private lateinit var options: LinearLayout
+    private lateinit var modeEnhanceButton: Button
+    private lateinit var modeTranslateButton: Button
+    private lateinit var levelBlock: LinearLayout
+    private lateinit var targetBlock: LinearLayout
+    private lateinit var targetChips: List<Pair<SharedWritingRules.TranslationTarget, Button>>
     private lateinit var levelButtons: List<Button>
     private lateinit var levelHint: TextView
     private lateinit var situationToggle: Button
@@ -82,6 +90,14 @@ class EnhanceSelectionActivity : Activity() {
     private var completed: String? = null
     private var historyId: String? = null
     private var request: Future<*>? = null
+    // "enhance"(강화하기) 또는 "translate"(번역하기)
+    private var mode = MODE_ENHANCE
+    private var target = "ko"
+    private var completedMode = MODE_ENHANCE
+    // 화면에서 잘라 낸 이미지로 읽은 글인지, 그때 AI가 알려 준 언어
+    private var fromScreen = false
+    private var languageCode = ""
+    private var languageName = ""
 
     private val preferences by lazy { getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
 
@@ -105,6 +121,14 @@ class EnhanceSelectionActivity : Activity() {
             ViewGroup.LayoutParams.WRAP_CONTENT,
         )
         window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        val image = ScreenReadFiles.resolve(this, intent.getStringExtra(EXTRA_IMAGE_PATH))
+        if (image != null) {
+            // 버블의 "화면 글 읽기"에서 잘라 낸 이미지: AI가 글을 읽은 뒤 강화하거나 번역한다.
+            fromScreen = true
+            canReplace = false
+            startReading(image)
+            return
+        }
         val text = SelectionTextPolicy.enhanceInput(intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT))
         if (text == null) {
             showMessage("선택한 글이 없어요.")
@@ -112,7 +136,82 @@ class EnhanceSelectionActivity : Activity() {
         }
         input = text
         original.setText(text)
+        chooseInitialMode(text)
         showOptions()
+    }
+
+    // 외국어 글이면 처음부터 한국어 번역으로 맞춰 둔다.
+    private fun chooseInitialMode(text: String) {
+        val foreign = SelectionTextPolicy.suggestsTranslation(text, languageCode)
+        mode = if (foreign) MODE_TRANSLATE else MODE_ENHANCE
+        target = if (foreign) "ko" else savedTarget()
+    }
+
+    private fun savedTarget(): String {
+        val saved = preferences.getString(KEY_TARGET, "en").orEmpty()
+        return SharedWritingRules.TRANSLATION_TARGETS.firstOrNull { it.code == saved }?.code ?: "en"
+    }
+
+    private fun startReading(image: java.io.File) {
+        setStatus("화면에서 글을 읽고 있어요…")
+        originalLabel.text = "화면에서 고른 부분"
+        original.isEnabled = false
+        options.visibility = View.GONE
+        resultBox.visibility = View.GONE
+        progress.visibility = View.VISIBLE
+        setButtons(actions, emptyList())
+        setButtons(secondary, listOf(button("취소", primary = false) { finish() }))
+        request = aiClient.readImageText(image) { outcome ->
+            // 읽은 뒤에는 이미지를 바로 지운다(기록에 남기지 않는다).
+            runCatching { image.delete() }
+            if (isFinishing || isDestroyed) return@readImageText
+            outcome.fold(
+                onSuccess = { read ->
+                    if (read.text.isBlank()) {
+                        showReadAgain("글자를 찾지 못했어요. 글자가 있는 부분을 조금 더 넓게 골라 주세요.")
+                        return@fold
+                    }
+                    input = read.text
+                    languageCode = read.language
+                    languageName = read.languageName
+                    original.isEnabled = true
+                    original.setText(read.text)
+                    chooseInitialMode(read.text)
+                    showOptions()
+                },
+                onFailure = { failure ->
+                    if (failure is MissingApiKeyException) {
+                        progress.visibility = View.GONE
+                        setStatus("설정에서 OpenAI 또는 Gemini API 키를 먼저 넣어 주세요.")
+                        setButtons(actions, listOf(button("설정 열기", primary = true) { openApp() }))
+                        setButtons(secondary, listOf(button("닫기", primary = false) { finish() }))
+                    } else {
+                        showReadAgain(failure.message?.take(160) ?: "화면의 글을 읽지 못했어요.")
+                    }
+                },
+            )
+        }
+    }
+
+    // 읽지 못했을 때: 다시 캡처하거나 닫는다.
+    private fun showReadAgain(message: String) {
+        progress.visibility = View.GONE
+        options.visibility = View.GONE
+        setStatus(message)
+        setButtons(
+            actions,
+            listOf(
+                button("다시 캡처", primary = true) {
+                    if (Settings.canDrawOverlays(this)) {
+                        startForegroundService(
+                            Intent(this, OverlayService::class.java).setAction(OverlayService.ACTION_READ_SCREEN),
+                        )
+                    }
+                    finish()
+                },
+            ),
+        )
+        setButtons(secondary, listOf(button("닫기", primary = false) { finish() }))
     }
 
     override fun onDestroy() {
@@ -209,7 +308,45 @@ class EnhanceSelectionActivity : Activity() {
 
     private fun buildOptions(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        addView(sectionTitle("강화 단계"))
+        // 강화하기 / 번역하기 전환
+        val modes = LinearLayout(this@EnhanceSelectionActivity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            background = Ui.rounded(Ui.PANEL_RAISED, 14, this@EnhanceSelectionActivity)
+        }
+        modeEnhanceButton = Ui.quietButton(this@EnhanceSelectionActivity, "강화하기") { setMode(MODE_ENHANCE) }.apply {
+            textSize = 14f
+        }
+        modeTranslateButton = Ui.quietButton(this@EnhanceSelectionActivity, "번역하기") { setMode(MODE_TRANSLATE) }.apply {
+            textSize = 14f
+        }
+        modes.addView(modeEnhanceButton, LinearLayout.LayoutParams(0, dp(40), 1f))
+        modes.addView(modeTranslateButton, LinearLayout.LayoutParams(0, dp(40), 1f).apply { marginStart = dp(4) })
+        addView(modes, matchWidth().apply { bottomMargin = dp(12) })
+        targetBlock = LinearLayout(this@EnhanceSelectionActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        targetBlock.addView(sectionTitle("옮길 언어"))
+        val targets = FlowLayout(this@EnhanceSelectionActivity).apply {
+            horizontalGap = dp(6)
+            verticalGap = dp(6)
+        }
+        targetChips = SharedWritingRules.TRANSLATION_TARGETS.map { option ->
+            option to Ui.quietButton(this@EnhanceSelectionActivity, option.label) { setTarget(option.code, remember = true) }.apply {
+                textSize = 13f
+                minHeight = dp(38)
+                setPadding(dp(14), dp(6), dp(14), dp(6))
+                contentDescription = "${option.label}로 번역"
+            }.also { chip ->
+                targets.addView(chip, ViewGroup.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
+            }
+        }
+        targetBlock.addView(targets, matchWidth().apply { bottomMargin = dp(12) })
+        addView(targetBlock, matchWidth())
+        levelBlock = LinearLayout(this@EnhanceSelectionActivity).apply { orientation = LinearLayout.VERTICAL }
+        addView(levelBlock, matchWidth())
+        levelBlock.addView(sectionTitle("강화 단계"))
         val row = LinearLayout(this@EnhanceSelectionActivity).apply { orientation = LinearLayout.HORIZONTAL }
         levelButtons = EnhancementLevelPolicy.levels.mapIndexed { index, definition ->
             Ui.quietButton(this@EnhanceSelectionActivity, "${definition.value}\n${SharedWritingRules.LEVEL_SHORT_LABELS[index]}") {
@@ -224,11 +361,11 @@ class EnhanceSelectionActivity : Activity() {
                 row.addView(button, LinearLayout.LayoutParams(0, dp(56), 1f).apply { if (index > 0) marginStart = dp(5) })
             }
         }
-        addView(row, matchWidth())
+        levelBlock.addView(row, matchWidth())
         levelHint = Ui.label(this@EnhanceSelectionActivity, "", 12f, Ui.PANEL_MUTED).apply {
             setPadding(dp(2), dp(8), 0, dp(12))
         }
-        addView(levelHint)
+        levelBlock.addView(levelHint)
         // 상황은 기본으로 접어 둔다. 고르면 접힌 버튼에 고른 상황이 보인다.
         situationToggle = Ui.quietButton(this@EnhanceSelectionActivity, "") { setSituationOpen(situationSection.visibility != View.VISIBLE) }.apply {
             textSize = 13f
@@ -342,10 +479,45 @@ class EnhanceSelectionActivity : Activity() {
     private fun currentInput(): String = SelectionTextPolicy.enhanceInput(original.text).orEmpty()
 
     private fun syncOriginal() {
-        originalLabel.text = SelectionTextPolicy.originalLabel(currentInput().length)
+        originalLabel.text = SelectionTextPolicy.originalLabel(currentInput().length, fromScreen, languageName)
         if (::actions.isInitialized && options.visibility == View.VISIBLE && actions.childCount > 0) {
             actions.getChildAt(0).isEnabled = currentInput().isNotEmpty()
         }
+    }
+
+    // ── 강화하기 / 번역하기 ─────────────────────────────────
+
+    private fun setMode(value: String) {
+        mode = if (value == MODE_TRANSLATE) MODE_TRANSLATE else MODE_ENHANCE
+        val translating = mode == MODE_TRANSLATE
+        for ((button, selected) in listOf(modeEnhanceButton to !translating, modeTranslateButton to translating)) {
+            button.background = Ui.interactive(this, if (selected) Ui.ACCENT else Color.TRANSPARENT, 11)
+            button.setTextColor(if (selected) Color.WHITE else Ui.PANEL_MUTED)
+            button.isSelected = selected
+        }
+        levelBlock.visibility = if (translating) View.GONE else View.VISIBLE
+        targetBlock.visibility = if (translating) View.VISIBLE else View.GONE
+        if (options.visibility == View.VISIBLE && actions.childCount > 0) {
+            (actions.getChildAt(0) as? Button)?.text = if (translating) "번역하기" else "강화하기"
+        }
+        setStatus(
+            if (translating) {
+                "옮길 언어와 상황(선택)을 고른 뒤 번역하세요."
+            } else {
+                "강화 단계와 상황(선택)을 고른 뒤 강화하세요."
+            },
+        )
+    }
+
+    private fun setTarget(code: String, remember: Boolean = false) {
+        target = ScreenTextPolicy.translationTarget(code).code
+        for ((option, chip) in targetChips) {
+            val chosen = option.code == target
+            chip.background = Ui.interactive(this, if (chosen) Ui.ACCENT else Ui.PANEL_FIELD, 19)
+            chip.setTextColor(if (chosen) Color.WHITE else Ui.PANEL_TEXT)
+            chip.isSelected = chosen
+        }
+        if (remember && target != "ko") preferences.edit().putString(KEY_TARGET, target).apply()
     }
 
     // ── 강화 단계 ───────────────────────────────────────────
@@ -496,15 +668,19 @@ class EnhanceSelectionActivity : Activity() {
 
     private fun showOptions() {
         request?.cancel(true)
-        setStatus("강화 단계와 상황(선택)을 고른 뒤 강화하세요.")
         original.isEnabled = true
         options.visibility = View.VISIBLE
         progress.visibility = View.GONE
         resultBox.visibility = View.GONE
         setLevel(level)
+        setTarget(target)
         renderChips()
         renderSituationToggle()
-        setButtons(actions, listOf(button("강화하기", primary = true) { start() }))
+        setButtons(
+            actions,
+            listOf(button(if (mode == MODE_TRANSLATE) "번역하기" else "강화하기", primary = true) { start() }),
+        )
+        setMode(mode)
         setButtons(
             secondary,
             buildList {
@@ -518,7 +694,7 @@ class EnhanceSelectionActivity : Activity() {
     private fun start() {
         val text = currentInput()
         if (text.isEmpty()) {
-            toast("강화할 글이 비어 있어요.")
+            toast(if (mode == MODE_TRANSLATE) "번역할 글이 비어 있어요." else "강화할 글이 비어 있어요.")
             return
         }
         // 고친 글로 바꿨다면 앞 결과와 다른 기록으로 남긴다.
@@ -529,13 +705,27 @@ class EnhanceSelectionActivity : Activity() {
         }
         val situation = currentSituation()
         val requestLevel = level
-        setStatus("글 ${input.length}자를 강화하는 중…")
+        val translating = mode == MODE_TRANSLATE
+        val targetLabel = ScreenTextPolicy.translationTarget(target).label
+        setStatus(if (translating) "${targetLabel}로 옮기는 중…" else "글 ${input.length}자를 강화하는 중…")
         original.isEnabled = false
         options.visibility = View.GONE
         resultBox.visibility = View.GONE
         progress.visibility = View.VISIBLE
         setButtons(actions, emptyList())
         setButtons(secondary, listOf(button("취소", primary = false) { finish() }))
+        request?.cancel(true)
+        if (translating) {
+            val requestTarget = target
+            request = aiClient.translate(input, requestTarget, situation) { outcome ->
+                if (isFinishing || isDestroyed) return@translate
+                outcome.fold(
+                    onSuccess = { showTranslation(it, requestTarget, situation) },
+                    onFailure = { failure -> showRequestFailure(failure) },
+                )
+            }
+            return
+        }
         val memories = memoryStore.relevantFor(listOf(situation, input).filter { it.isNotBlank() }.joinToString(" "))
             .map { "${it.sourceKind} | ${it.type} | ${it.scope} | ${it.value}" }
         request?.cancel(true)
@@ -551,23 +741,53 @@ class EnhanceSelectionActivity : Activity() {
             if (isFinishing || isDestroyed) return@enhance
             outcome.fold(
                 onSuccess = { show(it, requestLevel, situation) },
-                onFailure = { failure ->
-                    showOptions()
-                    if (failure is MissingApiKeyException) {
-                        setStatus("설정에서 OpenAI 또는 Gemini API 키를 먼저 넣어 주세요.")
-                        setButtons(actions, listOf(button("설정 열기", primary = true) { openApp() }))
-                    } else {
-                        setStatus(failure.message?.take(160) ?: "잠시 연결하지 못했어요.")
-                        setButtons(actions, listOf(button("다시 시도", primary = true) { start() }))
-                    }
-                },
+                onFailure = { failure -> showRequestFailure(failure) },
             )
         }
+    }
+
+    private fun showRequestFailure(failure: Throwable) {
+        showOptions()
+        if (failure is MissingApiKeyException) {
+            setStatus("설정에서 OpenAI 또는 Gemini API 키를 먼저 넣어 주세요.")
+            setButtons(actions, listOf(button("설정 열기", primary = true) { openApp() }))
+        } else {
+            setStatus(failure.message?.take(160) ?: "잠시 연결하지 못했어요.")
+            setButtons(actions, listOf(button("다시 시도", primary = true) { start() }))
+        }
+    }
+
+    private fun showTranslation(translation: TranslationResult, targetCode: String, situation: String) {
+        val text = translation.translatedText
+        val targetLabel = ScreenTextPolicy.translationTarget(targetCode).label
+        completed = text
+        completedMode = MODE_TRANSLATE
+        // 번역도 기록에 남긴다. 상황 칸에 옮긴 언어를 적어 기록에서 알아볼 수 있게 한다.
+        historyId = runCatching {
+            workspaceStore.addVersion(
+                historyId = historyId,
+                situation = SelectionTextPolicy.translationHistorySituation(targetLabel, situation),
+                rawInput = input,
+                attachments = emptyList(),
+                version = WorkspacePolicy.resultVersionForRequest(
+                    text = text,
+                    question = "",
+                    provider = translation.provider,
+                    createdAt = System.currentTimeMillis(),
+                    assumption = "",
+                    capturedRequestLevel = EnhancementLevelPolicy.DEFAULT,
+                ),
+            ).id
+        }.getOrNull() ?: historyId
+        summary.text = SelectionTextPolicy.translationSummary(targetLabel, situation)
+        result.text = text
+        showResult()
     }
 
     private fun show(enhancement: EnhancementResult, requestLevel: Int, situation: String) {
         val text = enhancement.completedText
         completed = text
+        completedMode = MODE_ENHANCE
         // 버블 창에서 보던 결과처럼 기록에 남긴다. 다시 강화하면 같은 기록에 결과가 쌓인다.
         historyId = runCatching {
             workspaceStore.addVersion(
@@ -598,10 +818,10 @@ class EnhanceSelectionActivity : Activity() {
         resultBox.visibility = View.VISIBLE
         result.text = text
         setStatus(
-            if (canReplace) {
-                "바꾸기를 누르면 선택한 글이 이 글로 바뀌어요."
-            } else {
-                "이 글은 바꿀 수 없는 곳에서 왔어요. 복사해서 쓰세요."
+            when {
+                canReplace -> "바꾸기를 누르면 선택한 글이 이 글로 바뀌어요."
+                fromScreen -> "화면에서 읽은 글이라 바꿔 넣을 곳이 없어요. 복사해서 쓰세요."
+                else -> "이 글은 바꿀 수 없는 곳에서 왔어요. 복사해서 쓰세요."
             },
         )
         val main = mutableListOf<Button>()
@@ -611,7 +831,10 @@ class EnhanceSelectionActivity : Activity() {
         setButtons(
             secondary,
             listOf(
-                button("다시 강화", primary = false) { start() },
+                button(if (completedMode == MODE_TRANSLATE) "다시 번역" else "다시 강화", primary = false) {
+                    mode = completedMode
+                    start()
+                },
                 button("앱에서 열기", primary = false) { openInPanel() },
                 button("닫기", primary = false) { finish() },
             ),
@@ -665,10 +888,16 @@ class EnhanceSelectionActivity : Activity() {
         setButtons(secondary, listOf(button("닫기", primary = false) { finish() }))
     }
 
-    private companion object {
-        const val PREFERENCES = "selection_enhance"
-        const val KEY_LEVEL = "level"
-        const val KEY_SITUATIONS = "situations"
-        const val ORIGINAL_MAX_LINES = 6
+    companion object {
+        /** 버블의 "화면 글 읽기"에서 잘라 낸 PNG 경로(ScreenReadFiles 폴더 안). */
+        const val EXTRA_IMAGE_PATH = "com.example.writingenhancer.extra.READ_IMAGE_PATH"
+
+        private const val PREFERENCES = "selection_enhance"
+        private const val KEY_LEVEL = "level"
+        private const val KEY_SITUATIONS = "situations"
+        private const val KEY_TARGET = "translation_target"
+        private const val ORIGINAL_MAX_LINES = 6
+        private const val MODE_ENHANCE = "enhance"
+        private const val MODE_TRANSLATE = "translate"
     }
 }

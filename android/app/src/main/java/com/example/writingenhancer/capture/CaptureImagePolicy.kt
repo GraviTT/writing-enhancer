@@ -13,8 +13,14 @@ object CaptureImagePolicy {
     const val MIN_OUTPUT_LONG_EDGE = 640
     private const val RETRY_SCALE = 0.82
 
+    // 화면 글 읽기는 작은 글자도 읽어야 하므로 거의 원래 해상도(QHD+ 휴대폰까지)로 찍는다.
+    const val MAX_READ_CAPTURE_LONG_EDGE = 3_200
+
     fun fitCapture(width: Int, height: Int): CaptureDimensions =
         fitWithin(width, height, MAX_CAPTURE_LONG_EDGE)
+
+    fun fitReadCapture(width: Int, height: Int): CaptureDimensions =
+        fitWithin(width, height, MAX_READ_CAPTURE_LONG_EDGE)
 
     fun nextPngSize(width: Int, height: Int): CaptureDimensions {
         val longEdge = maxOf(width, height)

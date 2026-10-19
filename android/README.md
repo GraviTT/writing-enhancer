@@ -1,6 +1,16 @@
-# 글 강화기 Android v0.7.1
+# 글 강화기 Android v0.8.0
 
 Android 8.0(API 26) 이상에서 동작하는 네이티브 Kotlin 오버레이 앱입니다.
+
+## 0.8.0 화면에서 글 읽기와 번역
+
+- 버블 알림의 `화면 글 읽기`(알림 트램펄린 제한 때문에 `BridgeActivity`를 바로 엶)나 패널 `도구`의 `화면에서 글 읽기 · 번역`
+  → 화면 공유 동의 → `ImageCropActivity`(읽기 모드: `전체 읽기`·`선택 읽기`) → `EnhanceSelectionActivity`가 이미지를 읽습니다.
+  읽기용 캡처는 `read-captures` 폴더에 원래 해상도(긴 변 3200px까지)로 두고, 고른 부분은 원본에서 `BitmapRegionDecoder`로
+  잘라 내며, 글을 읽은 뒤 지웁니다(`capture/ScreenReadFiles.kt`).
+- `글 강화` 창 위쪽에 `강화하기 | 번역하기`를 두었습니다. 번역은 한국어·영어·일본어·중국어로 옮기며 결과를 기록에 남깁니다.
+  외국어 글은 처음부터 한국어 번역으로 엽니다(`SelectionTextPolicy.suggestsTranslation`).
+- 글 읽기·번역 요청은 `AiClient.readImageText`·`translate`, 지시문과 응답 해석은 `ai/ScreenTextModels.kt`입니다.
 
 ## 0.7.1 상황 접기·상황 버튼 고치기·선택한 글 고쳐 쓰기
 

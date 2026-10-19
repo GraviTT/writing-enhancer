@@ -48,8 +48,46 @@ object SelectionTextPolicy {
         return "${definition.value}단계 · ${definition.label} — ${definition.lengthTarget}"
     }
 
-    /** 고쳐 쓸 수 있는 선택한 글 위에 붙는 이름. */
-    fun originalLabel(characters: Int): String = "선택한 글 · ${characters}자 · 고쳐 써도 돼요"
+    /** 고쳐 쓸 수 있는 선택한 글 위에 붙는 이름. 화면에서 읽은 글이면 읽은 언어도 보여 준다. */
+    fun originalLabel(characters: Int, fromScreen: Boolean = false, languageName: String = ""): String {
+        val origin = if (fromScreen) "화면에서 읽은 글" else "선택한 글"
+        val language = if (languageName.isBlank()) "" else " · ${languageName.trim()}"
+        return "$origin$language · ${characters}자 · 고쳐 써도 돼요"
+    }
+
+    private fun isHangul(codePoint: Int): Boolean =
+        codePoint in 0xAC00..0xD7A3 || codePoint in 0x1100..0x11FF || codePoint in 0x3130..0x318F
+
+    /**
+     * 번역이 필요해 보이는 외국어 글인지. AI가 알려 준 언어 코드가 있으면 그것을, 없으면
+     * 한글 비율(글자의 20% 미만)을 본다. Windows는 renderer/text-language.js.
+     */
+    fun suggestsTranslation(text: String, languageCode: String = ""): Boolean {
+        val code = languageCode.trim().lowercase()
+        if (code.isNotEmpty()) return code != "ko"
+        var hangul = 0
+        var other = 0
+        var index = 0
+        while (index < text.length) {
+            val codePoint = text.codePointAt(index)
+            if (isHangul(codePoint)) hangul += 1 else if (Character.isLetter(codePoint)) other += 1
+            index += Character.charCount(codePoint)
+        }
+        val letters = hangul + other
+        return letters >= 4 && hangul.toDouble() / letters < 0.2
+    }
+
+    /** 번역 결과 위에 보여 줄 요약. 예: "번역 · 한국어 · 업무 메일" */
+    fun translationSummary(targetLabel: String, situation: String): String {
+        val trimmed = situation.trim()
+        return if (trimmed.isEmpty()) "번역 · $targetLabel" else "번역 · $targetLabel · $trimmed"
+    }
+
+    /** 기록에 남길 상황 칸. 번역이면 옮긴 언어를 앞에 붙인다. */
+    fun translationHistorySituation(targetLabel: String, situation: String): String {
+        val trimmed = situation.trim()
+        return if (trimmed.isEmpty()) "번역 → $targetLabel" else "번역 → $targetLabel · $trimmed"
+    }
 
     /** 접어 둔 상황 칸을 여는 버튼 글. 상황을 골랐으면 접혀 있어도 보여 준다. */
     fun situationToggleLabel(open: Boolean, situation: String): String = when {

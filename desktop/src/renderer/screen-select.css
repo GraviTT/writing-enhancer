@@ -1,0 +1,54 @@
+/* 화면에서 읽을 부분을 고르는 전체 화면 창. 찍어 둔 화면 위에 고른 영역만 밝게 보여 준다. */
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+  cursor: crosshair;
+  user-select: none;
+  font-family: "Pretendard Variable", Pretendard, "Segoe UI", "Noto Sans KR", sans-serif;
+}
+
+#shot {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#shade {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 24, 0.38);
+  pointer-events: none;
+}
+
+#box {
+  position: fixed;
+  border: 2px solid #8f80ff;
+  border-radius: 3px;
+  box-shadow: 0 0 0 9999px rgba(10, 8, 24, 0.5);
+  pointer-events: none;
+}
+
+.is-hidden {
+  display: none;
+}
+
+#hint {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 9px 16px;
+  border-radius: 999px;
+  background: rgba(24, 22, 40, 0.88);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  pointer-events: none;
+  white-space: nowrap;
+}

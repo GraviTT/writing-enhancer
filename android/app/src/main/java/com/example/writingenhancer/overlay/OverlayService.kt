@@ -56,6 +56,7 @@ import com.example.writingenhancer.ai.SideChatAction
 import com.example.writingenhancer.ai.SideChatWritingContext
 import com.example.writingenhancer.capture.BridgeActivity
 import com.example.writingenhancer.capture.ImageCropActivity
+import com.example.writingenhancer.capture.ScreenReadFiles
 import com.example.writingenhancer.data.DraftState
 import com.example.writingenhancer.data.HistoryEntry
 import com.example.writingenhancer.data.ResultVersion
@@ -209,6 +210,8 @@ class OverlayService : Service() {
             ACTION_OPEN -> showPanel()
             ACTION_OPEN_HISTORY -> openHistoryFromSelection(intent.getStringExtra(EXTRA_HISTORY_ID))
             ACTION_OPEN_CHAT_TEXT -> openChatFromSelection(intent.getStringExtra(EXTRA_TEXT))
+            ACTION_READ_SCREEN -> startScreenRead()
+            ACTION_PREPARE_SCREEN_READ -> prepareScreenRead()
             ACTION_RESIZE_BUBBLE -> applyBubbleSize()
             ACTION_ATTACHMENT_RESULT -> receiveAttachment(intent)
             ACTION_CAPTURE_CANCELLED -> {
@@ -250,6 +253,7 @@ class OverlayService : Service() {
         val allowedRoots = listOf(
             File(filesDir, BridgeActivity.ATTACHMENT_DIRECTORY),
             File(filesDir, BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY),
+            ScreenReadFiles.directory(this),
         )
         val candidatePath = runCatching { candidate.canonicalPath }.getOrNull() ?: return
         val belongsToApp = allowedRoots.any { root ->
@@ -321,13 +325,24 @@ class OverlayService : Service() {
             Intent(this, OverlayService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // 알림에서 서비스를 거쳐 화면을 열면 Android 12부터 막히므로(알림 트램펄린) 캡처 화면을 바로 연다.
+        val readIntent = PendingIntent.getActivity(
+            this,
+            3,
+            Intent(this, BridgeActivity::class.java)
+                .setAction(BridgeActivity.ACTION_CAPTURE_SCREEN)
+                .putExtra(BridgeActivity.EXTRA_TARGET, BridgeActivity.TARGET_READ_TEXT)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(com.example.writingenhancer.R.drawable.ic_launcher)
             .setContentTitle("글 강화기가 대기 중이에요")
-            .setContentText("버블을 누르면 바로 글을 완성할 수 있어요.")
+            .setContentText("버블을 누르면 바로 글을 완성할 수 있어요. 드래그가 안 되는 글은 화면 글 읽기로.")
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(null, "화면 글 읽기", readIntent).build())
             .addAction(Notification.Action.Builder(null, "버블 끄기", stopIntent).build())
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -610,6 +625,10 @@ class OverlayService : Service() {
             showBridgeError("첨부 파일을 찾지 못했어요.")
             return
         }
+        if (intent.getStringExtra(EXTRA_TARGET) == BridgeActivity.TARGET_READ_TEXT) {
+            openReadCrop(attachment)
+            return
+        }
         if (isSideChatVisualTarget(intent.getStringExtra(EXTRA_TARGET))) {
             if (
                 !attachment.mimeType.startsWith("image/") ||
@@ -670,6 +689,45 @@ class OverlayService : Service() {
         bridgeInProgress = false
         panel?.restoreAfterBridge()
         if (panel == null) bubble?.visibility = View.VISIBLE
+    }
+
+    // ── 화면 글 읽기 ───────────────────────────────────────
+    // 드래그할 수 없는 글은 화면을 찍어 읽을 부분을 고른 뒤 AI가 읽는다. 결과는 글 강화 창에서 강화·번역한다.
+
+    // 패널을 접고 버블을 숨겨 캡처에 찍히지 않게 한다. 남아 있던 읽기용 캡처는 지운다.
+    private fun prepareScreenRead() {
+        bridgeInProgress = true
+        panel?.close()
+        bubble?.visibility = View.GONE
+        ScreenReadFiles.clear(this)
+    }
+
+    private fun startScreenRead() {
+        if (bridgeInProgress) return
+        prepareScreenRead()
+        val bridge = Intent(this, BridgeActivity::class.java)
+            .setAction(BridgeActivity.ACTION_CAPTURE_SCREEN)
+            .putExtra(BridgeActivity.EXTRA_TARGET, BridgeActivity.TARGET_READ_TEXT)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        runCatching { startActivity(bridge) }
+            .onFailure {
+                restoreAfterBridge()
+                Toast.makeText(this, "화면 공유 기능을 열지 못했어요.", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun openReadCrop(attachment: AttachmentRef) {
+        val crop = Intent(this, ImageCropActivity::class.java)
+            .putExtra(ImageCropActivity.EXTRA_PATH, attachment.path)
+            .putExtra(ImageCropActivity.EXTRA_NAME, attachment.displayName)
+            .putExtra(ImageCropActivity.EXTRA_SOURCE, attachment.source)
+            .putExtra(ImageCropActivity.EXTRA_MODE, ImageCropActivity.MODE_READ)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+        runCatching { startActivity(crop) }
+            .onFailure {
+                runCatching { File(attachment.path).delete() }
+                Toast.makeText(this, "읽을 부분을 고르는 화면을 열지 못했어요.", Toast.LENGTH_SHORT).show()
+            }
     }
 
     private fun showBridgeError(message: String) {
@@ -1503,6 +1561,18 @@ class OverlayService : Service() {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         dp(42),
                     ),
+                )
+                // 드래그할 수 없는 글을 화면에서 골라 읽고 강화하거나 번역한다(위 ▣ 화면은 참고 이미지 첨부).
+                val readScreen = compactAction("⌕ 화면에서 글 읽기 · 번역", Ui.PANEL_FIELD).apply {
+                    contentDescription = "드래그할 수 없는 글을 화면에서 골라 읽고 강화하거나 번역하기"
+                    setOnClickListener { startScreenRead() }
+                }
+                toolGrid.addView(
+                    readScreen,
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        dp(42),
+                    ).apply { topMargin = dp(6) },
                 )
                 content.addView(
                     toolGrid,
@@ -3226,6 +3296,10 @@ class OverlayService : Service() {
         const val ACTION_OPEN = "com.example.writingenhancer.action.OPEN"
         const val ACTION_OPEN_HISTORY = "com.example.writingenhancer.action.OPEN_HISTORY"
         const val ACTION_OPEN_CHAT_TEXT = "com.example.writingenhancer.action.OPEN_CHAT_TEXT"
+        // 화면 글 읽기: 패널·버블을 숨기고 화면 공유 동의를 연다(패널 도구·다시 캡처).
+        const val ACTION_READ_SCREEN = "com.example.writingenhancer.action.READ_SCREEN"
+        // 알림에서 캡처 화면이 바로 열렸을 때, 버블과 패널만 숨긴다.
+        const val ACTION_PREPARE_SCREEN_READ = "com.example.writingenhancer.action.PREPARE_SCREEN_READ"
         const val EXTRA_HISTORY_ID = "history_id"
         const val ACTION_RESIZE_BUBBLE = "com.example.writingenhancer.action.RESIZE_BUBBLE"
         const val ACTION_ATTACHMENT_RESULT =

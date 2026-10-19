@@ -84,6 +84,10 @@ contextBridge.exposeInMainWorld("writingEnhancer", {
   saveSituationPresets: (situations) =>
     ipcRenderer.invoke("selection:save-situations", { situations }),
   resetSituationPresets: () => ipcRenderer.invoke("selection:save-situations", { reset: true }),
+  readScreen: () => ipcRenderer.invoke("selection:read-screen"),
+  translate: (payload) => ipcRenderer.invoke("writing:translate", payload),
+  onSelectionReading: (callback) => subscribe("selection:reading", callback),
+  onSelectionReadFailed: (callback) => subscribe("selection:read-failed", callback),
   onSelectionOpen: (callback) => subscribe("selection:open", callback),
   onSelectionEmpty: (callback) => subscribe("selection:empty", callback),
   onSelectionOffer: (callback) => subscribe("selection:offer", callback),

@@ -119,9 +119,209 @@ class AiClient(private val secureStore: SecureStore) {
         return call
     }
 
+    /** 화면에서 잘라 낸 PNG 한 장의 글자를 읽는다. 화면 이미지는 다른 AI에 다시 보내지 않는다. */
+    fun readImageText(
+        image: File,
+        callback: (Result<ImageTextResult>) -> Unit,
+    ): Future<*> = enhancementExecutor.submit {
+        val result = runCatching { runImageText(image) }
+        mainHandler.post { callback(result) }
+    }
+
+    /** 글을 지정한 언어(ko·en·ja·zh)로 번역한다. 실패하면 다른 AI로 한 번 넘어간다. */
+    fun translate(
+        input: String,
+        targetCode: String,
+        situation: String,
+        callback: (Result<TranslationResult>) -> Unit,
+    ): Future<*> = enhancementExecutor.submit {
+        val result = runCatching { runTranslation(input, targetCode, situation) }
+        mainHandler.post { callback(result) }
+    }
+
     fun close() {
         enhancementExecutor.shutdownNow()
         chatExecutor.shutdownNow()
+    }
+
+    private fun runImageText(image: File): ImageTextResult {
+        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
+        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
+        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) throw MissingApiKeyException()
+        require(image.isFile && image.length() > 0) { "읽을 화면 이미지가 없어요." }
+        requireValidBinary(
+            image,
+            AttachmentRef(image.absolutePath, "화면에서 읽을 부분.png", "image/png", image.length(), "screenshot"),
+        )
+        return try {
+            if (!openAiKey.isNullOrBlank()) {
+                val content = JSONArray()
+                    .put(JSONObject().put("type", "input_text").put("text", SharedWritingRules.IMAGE_TEXT_USER))
+                    .put(
+                        JSONObject()
+                            .put("type", "input_image")
+                            .put("image_url", dataUrl(image, "image/png"))
+                            // 작은 글자를 읽어야 하므로 원래 해상도로 보낸다.
+                            .put("detail", "high"),
+                    )
+                ScreenTextPolicy.parseImageText(
+                    callOpenAiStructured(
+                        openAiKey,
+                        SharedWritingRules.IMAGE_TEXT_SYSTEM,
+                        content,
+                        "writing_enhancer_image_text",
+                        ScreenTextPolicy.imageTextSchema(),
+                    ),
+                    "GPT",
+                )
+            } else {
+                val parts = JSONArray()
+                    .put(JSONObject().put("text", SharedWritingRules.IMAGE_TEXT_USER))
+                    .put(
+                        JSONObject().put(
+                            "inline_data",
+                            JSONObject()
+                                .put("mime_type", "image/png")
+                                .put("data", Base64.encodeToString(image.readBytes(), Base64.NO_WRAP)),
+                        ),
+                    )
+                ScreenTextPolicy.parseImageText(
+                    callGeminiStructured(
+                        requireNotNull(geminiKey),
+                        SharedWritingRules.IMAGE_TEXT_SYSTEM,
+                        parts,
+                        ScreenTextPolicy.imageTextSchema(),
+                    ),
+                    "Gemini",
+                )
+            }
+        } catch (failure: Throwable) {
+            throw IOException("화면의 글을 읽지 못했어요. 이미지는 저장하지 않았으니 다시 캡처해 주세요.", failure)
+        }
+    }
+
+    private fun runTranslation(input: String, targetCode: String, situation: String): TranslationResult {
+        val text = input.trim()
+        require(text.isNotEmpty()) { "번역할 글을 먼저 적어 주세요." }
+        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
+        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
+        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) throw MissingApiKeyException()
+        val prompt = ScreenTextPolicy.translationPrompt(text, targetCode, situation)
+        var primaryFailure: Throwable? = null
+        if (!openAiKey.isNullOrBlank()) {
+            try {
+                return ScreenTextPolicy.parseTranslation(
+                    callOpenAiStructured(
+                        openAiKey,
+                        SharedWritingRules.TRANSLATION_SYSTEM,
+                        JSONArray().put(JSONObject().put("type", "input_text").put("text", prompt)),
+                        "writing_enhancer_translation",
+                        ScreenTextPolicy.translationSchema(),
+                    ),
+                    "GPT",
+                )
+            } catch (failure: Throwable) {
+                primaryFailure = failure
+            }
+        }
+        if (!geminiKey.isNullOrBlank()) {
+            try {
+                return ScreenTextPolicy.parseTranslation(
+                    callGeminiStructured(
+                        geminiKey,
+                        SharedWritingRules.TRANSLATION_SYSTEM,
+                        JSONArray().put(JSONObject().put("text", prompt)),
+                        ScreenTextPolicy.translationSchema(),
+                    ),
+                    "Gemini",
+                )
+            } catch (failure: Throwable) {
+                primaryFailure?.let { failure.addSuppressed(it) }
+                throw failure
+            }
+        }
+        throw primaryFailure ?: MissingApiKeyException()
+    }
+
+    // JSON 스키마로 답을 받는 짧은 요청(화면 글 읽기·번역). 답의 JSON 글을 돌려준다.
+    private fun callOpenAiStructured(
+        apiKey: String,
+        instructions: String,
+        content: JSONArray,
+        schemaName: String,
+        schema: JSONObject,
+    ): String {
+        val body = JSONObject().apply {
+            OpenAiPrivacyPolicy.REQUIRED_BODY_FIELDS.forEach { (name, value) -> put(name, value) }
+        }
+            .put("model", OPENAI_MODEL)
+            .put("instructions", instructions)
+            .put("input", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
+            .put("reasoning", JSONObject().put("effort", "low"))
+            .put(
+                "text",
+                JSONObject()
+                    .put("verbosity", "low")
+                    .put(
+                        "format",
+                        JSONObject()
+                            .put("type", "json_schema")
+                            .put("name", schemaName)
+                            .put("strict", true)
+                            .put("schema", schema),
+                    ),
+            )
+        val response = postJson(
+            url = "https://api.openai.com/v1/responses",
+            body = body,
+            headers = mapOf("Authorization" to "Bearer $apiKey"),
+            provider = "GPT",
+            maxRequestBytes = RequestSizePolicy.OPENAI_MAX_BYTES,
+        )
+        val output = JSONObject(response).optJSONArray("output") ?: JSONArray()
+        for (index in 0 until output.length()) {
+            val parts = output.optJSONObject(index)?.optJSONArray("content") ?: continue
+            for (partIndex in 0 until parts.length()) {
+                val part = parts.optJSONObject(partIndex) ?: continue
+                if (part.optString("type") == "output_text") return part.getString("text")
+            }
+        }
+        throw IOException("GPT 응답에 글이 없습니다.")
+    }
+
+    private fun callGeminiStructured(
+        apiKey: String,
+        instructions: String,
+        parts: JSONArray,
+        schema: JSONObject,
+    ): String {
+        val body = JSONObject()
+            .put(
+                "system_instruction",
+                JSONObject().put("parts", JSONArray().put(JSONObject().put("text", instructions))),
+            )
+            .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", parts)))
+            .put(
+                "generationConfig",
+                JSONObject()
+                    .put("responseMimeType", "application/json")
+                    .put("responseJsonSchema", schema),
+            )
+        validateGeminiRequestBody(body, searchEnabled = false)
+        val response = postJson(
+            url = "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent",
+            body = body,
+            headers = mapOf("x-goog-api-key" to apiKey),
+            provider = "Gemini",
+            maxRequestBytes = RequestSizePolicy.GEMINI_MAX_BYTES,
+        )
+        return JSONObject(response)
+            .getJSONArray("candidates")
+            .getJSONObject(0)
+            .getJSONObject("content")
+            .getJSONArray("parts")
+            .getJSONObject(0)
+            .getString("text")
     }
 
     private fun runRequest(request: EnhancementRequest): EnhancementResult {

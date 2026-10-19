@@ -111,7 +111,11 @@ class ScreenCaptureService : Service() {
         )
 
         val (screenWidth, screenHeight) = screenSize()
-        val captureSize = CaptureImagePolicy.fitCapture(screenWidth, screenHeight)
+        val captureSize = if (captureTarget == BridgeActivity.TARGET_READ_TEXT) {
+            CaptureImagePolicy.fitReadCapture(screenWidth, screenHeight)
+        } else {
+            CaptureImagePolicy.fitCapture(screenWidth, screenHeight)
+        }
         val width = captureSize.width
         val height = captureSize.height
         val density = resources.displayMetrics.densityDpi
@@ -173,12 +177,11 @@ class ScreenCaptureService : Service() {
             padded = Bitmap.createBitmap(paddedWidth, height, Bitmap.Config.ARGB_8888)
             padded.copyPixelsFromBuffer(buffer)
             cropped = Bitmap.createBitmap(padded, 0, 0, width, height)
-            val directoryName = if (captureTarget == BridgeActivity.TARGET_SIDE_CHAT_SCREEN) {
-                BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY
-            } else {
-                BridgeActivity.ATTACHMENT_DIRECTORY
-            }
-            val directory = File(filesDir, directoryName).apply { mkdirs() }
+            val directory = when (captureTarget) {
+                BridgeActivity.TARGET_SIDE_CHAT_SCREEN -> File(filesDir, BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY)
+                BridgeActivity.TARGET_READ_TEXT -> ScreenReadFiles.directory(this)
+                else -> File(filesDir, BridgeActivity.ATTACHMENT_DIRECTORY)
+            }.apply { mkdirs() }
             val outputFile = File(directory, "화면-${System.currentTimeMillis()}.png")
             destination = outputFile
             if (!writeBoundedPng(requireNotNull(cropped), outputFile)) {

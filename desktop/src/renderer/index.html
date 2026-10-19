@@ -123,8 +123,12 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h4l1.5-2h5L16 7h4v12H4zM12 10a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z" /></svg>
                   <span>화면 촬영</span>
                 </button>
+                <button id="readScreenButton" class="tool-button" type="button" title="드래그할 수 없는 글을 화면에서 골라 읽고, 강화하거나 번역해요">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5h3M17 5h3v3M20 16v3h-3M7 19H4v-3M8 10h8M8 14h5" /></svg>
+                  <span>화면 글 읽기</span>
+                </button>
                 <button class="tool-button voice-button" data-voice-target="sourceInput" type="button" aria-label="글 음성 입력">
-                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0 14 0M12 19v3M9 22h6" /></svg>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm-7 9a7 7 0 0 0 14 0M12 19v3M9 22h6" /></svg>
                   <span>말하기</span>
                 </button>
               </div>
@@ -225,9 +229,19 @@
             </div>
 
             <div id="selectionOptions" class="selection-options">
-              <div class="selection-field-title">강화 단계</div>
-              <div id="selectionLevels" class="level-segments" role="radiogroup" aria-label="강화 단계"></div>
-              <p id="selectionLevelHint" class="selection-hint"></p>
+              <div id="selectionModes" class="mode-tabs" role="tablist" aria-label="할 일">
+                <button id="selectionModeEnhance" class="mode-tab" type="button" role="tab" aria-selected="true">강화하기</button>
+                <button id="selectionModeTranslate" class="mode-tab" type="button" role="tab" aria-selected="false">번역하기</button>
+              </div>
+              <div id="selectionLevelBlock">
+                <div class="selection-field-title">강화 단계</div>
+                <div id="selectionLevels" class="level-segments" role="radiogroup" aria-label="강화 단계"></div>
+                <p id="selectionLevelHint" class="selection-hint"></p>
+              </div>
+              <div id="selectionTargetBlock" class="is-hidden">
+                <div class="selection-field-title">옮길 언어</div>
+                <div id="selectionTargets" class="situation-chips target-chips" role="radiogroup" aria-label="옮길 언어"></div>
+              </div>
               <button id="selectionSituationToggle" class="compact-toggle selection-situation-toggle" type="button" aria-expanded="false" aria-controls="selectionSituationSection">＋ 상황 고르기 · 선택</button>
               <div id="selectionSituationSection" class="selection-situation-section is-hidden">
                 <div id="selectionSituations" class="situation-chips" role="group" aria-label="자주 쓰는 상황"></div>
@@ -247,7 +261,7 @@
 
             <div id="selectionLoading" class="selection-loading is-hidden" aria-live="polite">
               <div class="thinking-mark" aria-hidden="true"><span></span><span></span><span></span></div>
-              <p>선택한 글을 강화하고 있어요</p>
+              <p id="selectionLoadingText">선택한 글을 강화하고 있어요</p>
             </div>
 
             <div id="selectionResult" class="selection-result is-hidden">
@@ -471,6 +485,10 @@
                 <input id="copyOfferInput" type="checkbox" />
                 <span>창을 열 때 방금 복사한 글 강화 제안<small>오른쪽 클릭 메뉴로 복사한 뒤 손잡이를 눌러도 강화할 수 있어요</small></span>
               </label>
+              <label class="check-row" for="screenReadFallbackInput">
+                <input id="screenReadFallbackInput" type="checkbox" />
+                <span>드래그한 글이 없으면 화면에서 읽기<small>단축키를 눌렀을 때 선택한 글이 없으면, 읽을 부분을 마우스로 골라 AI가 읽어요</small></span>
+              </label>
             </div>
 
             <div class="memory-setting">
@@ -523,6 +541,7 @@
     <script src="./side-chat-rules.js"></script>
     <script src="./writing-rules.js"></script>
     <script src="./situation-presets.js"></script>
+    <script src="./text-language.js"></script>
     <script src="./side-chat-text.js"></script>
     <script src="./chat-answer.js"></script>
     <script src="./renderer.js"></script>

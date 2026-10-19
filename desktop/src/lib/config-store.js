@@ -10,6 +10,8 @@ const DEFAULTS = Object.freeze({
   selectionShortcut: "CommandOrControl+Shift+G",
   // 창을 열 때 방금 다른 프로그램에서 복사한 글을 강화할지 묻는다.
   copyOfferEnabled: true,
+  // 선택 글 강화 단축키를 눌렀는데 드래그한 글이 없으면 화면에서 읽을 부분을 고르게 한다.
+  screenReadFallback: true,
   memoryEnabled: true,
   memoryAdditionsEnabled: true,
   windowMode: "docked",
@@ -40,6 +42,7 @@ function normalizePublic(value = {}) {
     shortcut: String(value.shortcut || DEFAULTS.shortcut).slice(0, 120),
     selectionShortcut: String(value.selectionShortcut || DEFAULTS.selectionShortcut).slice(0, 120),
     copyOfferEnabled: value.copyOfferEnabled !== false,
+    screenReadFallback: value.screenReadFallback !== false,
     memoryEnabled: value.memoryEnabled !== false,
     memoryAdditionsEnabled:
       typeof value.memoryAdditionsEnabled === "boolean"
@@ -166,6 +169,7 @@ class ConfigStore {
     shortcut,
     selectionShortcut,
     copyOfferEnabled,
+    screenReadFallback,
     memoryEnabled,
     memoryAdditionsEnabled,
     windowMode,
@@ -187,6 +191,9 @@ class ConfigStore {
     }
     if (typeof copyOfferEnabled === "boolean") {
       this.data.copyOfferEnabled = copyOfferEnabled;
+    }
+    if (typeof screenReadFallback === "boolean") {
+      this.data.screenReadFallback = screenReadFallback;
     }
     if (typeof memoryEnabled === "boolean") {
       this.data.memoryEnabled = memoryEnabled;

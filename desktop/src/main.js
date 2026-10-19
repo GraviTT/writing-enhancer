@@ -55,6 +55,7 @@ const {
   registerWithFallback
 } = require("./lib/shortcut-registration");
 const { finalizeDraggedBounds, resolvePanelBounds } = require("./lib/window-layout");
+const { imageCropRect, normalizeSelection } = require("./lib/screen-read");
 
 const QA_CAPTURE = process.argv.includes("--qa-capture");
 const SMOKE_TEST = process.argv.includes("--smoke-test");
@@ -609,6 +610,8 @@ async function captureQaScreens() {
   await captureSelection('window.selectionPanel?.showDemo("options")', "v6-01-selection-options.png");
   await captureSelection('window.selectionPanel?.showDemo("result")', "v6-02-selection-result.png");
   await captureSelection('window.selectionPanel?.showDemo("situations")', "v6-04-selection-situations.png");
+  await captureSelection('window.selectionPanel?.showDemo("screen")', "v7-01-screen-read-translate.png");
+  await captureSelection('window.selectionPanel?.showDemo("translate-result")', "v7-02-translate-result.png");
   await captureSelection(
     'window.selectionPanel?.close(); document.querySelector("#copyOfferPreview").textContent = "내일 회의 자료 아직 못 만들었어. 오늘 밤까지 정리해서… · 41자"; document.querySelector("#copyOffer").classList.remove("is-hidden")',
     "v6-03-copy-offer.png"
@@ -727,20 +730,150 @@ function rememberSelectionTarget(target) {
   return token;
 }
 
-function selectionPayload({ text, target, source }) {
+function selectionPayload({ text, target, source, language = "", languageName = "" }) {
   return {
     text,
     source,
     token: rememberSelectionTarget(target),
     targetLabel: target ? appLabel(target) : "",
-    canReplace: Boolean(target?.hwnd)
+    canReplace: Boolean(target?.hwnd),
+    language,
+    languageName
   };
 }
 
-function openSelection({ text, target = null, source }) {
+function openSelection({ text, target = null, source, language = "", languageName = "" }) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   showWritingWindow({ focus: true });
-  mainWindow.webContents.send("selection:open", selectionPayload({ text, target, source }));
+  mainWindow.webContents.send(
+    "selection:open",
+    selectionPayload({ text, target, source, language, languageName })
+  );
+}
+
+// ── 화면에서 글 읽기 ───────────────────────────────────────
+// 드래그할 수 없는 글(이미지·게임·영상 자막 등)은 화면을 찍고, 사용자가 고른 부분을 AI가 읽는다.
+
+let screenReadBusy = false;
+
+// 찍어 둔 화면을 전체 화면 창에 띄워 사용자가 읽을 부분을 드래그로 고르게 한다. 취소하면 null.
+function selectScreenRegion(display, shot) {
+  return new Promise((resolve) => {
+    const { bounds } = display;
+    const picker = new BrowserWindow({
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      show: false,
+      frame: false,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      hasShadow: false,
+      enableLargerThanScreen: true,
+      backgroundColor: "#000000",
+      title: "읽을 부분 고르기",
+      webPreferences: {
+        preload: path.join(__dirname, "screen-select-preload.js"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    picker.setAlwaysOnTop(true, "screen-saver");
+    let settled = false;
+    const finish = (rect) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      ipcMain.removeListener("screen-select:done", onDone);
+      ipcMain.removeListener("screen-select:cancel", onCancel);
+      if (!picker.isDestroyed()) picker.destroy();
+      resolve(rect);
+    };
+    const onDone = (event, rect) => {
+      if (event.sender === picker.webContents) finish(normalizeSelection(rect, bounds));
+    };
+    const onCancel = (event) => {
+      if (event.sender === picker.webContents) finish(null);
+    };
+    // 2분 안에 고르지 않으면 닫는다.
+    const timer = setTimeout(() => finish(null), 120_000);
+    ipcMain.on("screen-select:done", onDone);
+    ipcMain.on("screen-select:cancel", onCancel);
+    picker.on("closed", () => finish(null));
+    picker.webContents.once("did-finish-load", () => {
+      picker.webContents.send("screen-select:image", {
+        dataUrl: `data:image/jpeg;base64,${shot.toJPEG(88).toString("base64")}`
+      });
+      picker.show();
+      picker.focus();
+    });
+    picker.loadFile(path.join(__dirname, "renderer", "screen-select.html"));
+  });
+}
+
+async function startScreenRead() {
+  if (screenReadBusy || !mainWindow || mainWindow.isDestroyed()) return;
+  screenReadBusy = true;
+  const wasVisible = mainWindow.isVisible();
+  const expandedBefore = isExpanded;
+  let opened = false;
+  try {
+    // 글 강화기 창이 찍히지 않게 잠시 숨기고, 마우스가 있는 화면을 찍는다.
+    suppressAutoCollapse(3_000);
+    if (wasVisible) mainWindow.hide();
+    await wait(220);
+    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const { width, height } = captureRequestDimensions(display);
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width, height },
+      fetchWindowIcons: false
+    });
+    const source = chooseCaptureSource(sources, display.id);
+    if (!source || source.thumbnail.isEmpty()) throw new Error("현재 화면을 찍지 못했어요.");
+    const shot = source.thumbnail;
+    const selection = await selectScreenRegion(display, shot);
+    if (!selection) return;
+    const crop = shot.crop(imageCropRect(selection, display.bounds, shot.getSize()));
+    const attachment = makeBoundedScreenAttachment(crop, "화면에서 읽을 부분.png");
+    showWritingWindow({ focus: true });
+    opened = true;
+    mainWindow.webContents.send("selection:reading", {});
+    const result = await aiClient.readImageText({ attachment });
+    if (!result.text) {
+      mainWindow.webContents.send("selection:read-failed", {
+        message: "글자를 찾지 못했어요. 글자가 있는 부분을 조금 더 넓게 골라 주세요."
+      });
+      return;
+    }
+    openSelection({
+      text: result.text,
+      source: "screen",
+      language: result.language,
+      languageName: result.languageName
+    });
+  } catch (error) {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    showWritingWindow({ focus: true });
+    opened = true;
+    mainWindow.webContents.send("selection:read-failed", {
+      message: error?.message || "화면의 글을 읽지 못했어요.",
+      code: error?.code || ""
+    });
+  } finally {
+    screenReadBusy = false;
+    // 고르기를 취소했으면 창을 원래대로 되돌린다.
+    if (!opened && wasVisible && mainWindow && !mainWindow.isDestroyed()) {
+      setPanelState(expandedBefore, { focus: false, remember: false });
+    }
+  }
 }
 
 // 맨 앞 프로그램에서 선택한 글을 복사 키로 가져오고, 원래 클립보드 내용을 되돌린다.
@@ -771,6 +904,12 @@ async function enhanceSelectionFromShortcut() {
     const { text, target, reason } = await captureForegroundSelection();
     if (text) {
       openSelection({ text, target, source: "shortcut" });
+      return;
+    }
+    // 드래그한 글이 없으면 화면에서 읽을 부분을 고르게 한다(설정에서 끌 수 있음).
+    if (reason === "empty" && configStore.getPublicSettings().screenReadFallback) {
+      selectionCaptureBusy = false;
+      await startScreenRead();
       return;
     }
     showWritingWindow({ focus: true });
@@ -919,6 +1058,7 @@ function refreshTrayMenu() {
     Menu.buildFromTemplate([
       ...updateMenuItems(),
       { label: "열기 / 접기", click: togglePanel },
+      { label: "화면에서 글 읽기", click: () => startScreenRead() },
       {
         label: "복사한 글 강화",
         click: async () => {
@@ -1554,6 +1694,22 @@ function registerIpcHandlers() {
     configStore.saveSituationPresets(request?.reset === true ? null : request?.situations)
   );
   ipcMain.handle("selection:use-copied", () => useCopiedText());
+  ipcMain.handle("selection:read-screen", () => {
+    startScreenRead();
+    return { started: true };
+  });
+  ipcMain.handle("writing:translate", async (_event, request) => {
+    try {
+      const result = await aiClient.translate({
+        input: limitedText(request?.input, 12_000),
+        targetLanguage: limitedText(request?.targetLanguage, 8),
+        situation: limitedText(request?.situation, 2_000)
+      });
+      return { ok: true, result: { translatedText: result.translatedText, provider: result.provider } };
+    } catch (error) {
+      return { ok: false, error: safeError(error) };
+    }
+  });
   ipcMain.handle("selection:replace", (_event, request) => replaceSelection(request));
   ipcMain.handle("selection:copy", (_event, request) => {
     const value = String(request?.text ?? "").trim();

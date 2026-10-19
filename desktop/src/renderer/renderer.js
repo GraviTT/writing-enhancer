@@ -80,6 +80,8 @@ const elements = Object.fromEntries(
     "shortcutInput",
     "selectionShortcutInput",
     "copyOfferInput",
+    "screenReadFallbackInput",
+    "readScreenButton",
     "memoryCount",
     "memoryAdditionsDisabled",
     "manageMemoryButton",
@@ -812,6 +814,7 @@ async function openSettings() {
   elements.shortcutInput.value = settings.shortcut;
   elements.selectionShortcutInput.value = settings.selectionShortcut;
   elements.copyOfferInput.checked = settings.copyOfferEnabled !== false;
+  elements.screenReadFallbackInput.checked = settings.screenReadFallback !== false;
   elements.memoryCount.textContent = `${settings.memoryCount}개 저장됨 · 기존 기억은 유지`;
   elements.memoryAdditionsDisabled.checked = settings.memoryAdditionsEnabled === false;
   elements.windowMode.value = settings.windowMode;
@@ -838,6 +841,7 @@ function displaySettingsPayload() {
   return {
     shortcut: state.settings?.shortcut || elements.shortcutInput.value.trim(),
     copyOfferEnabled: elements.copyOfferInput.checked,
+    screenReadFallback: elements.screenReadFallbackInput.checked,
     memoryAdditionsEnabled: !elements.memoryAdditionsDisabled.checked,
     windowMode: elements.windowMode.value,
     windowOpacity: Number(elements.opacityInput.value) / 100,
@@ -1056,6 +1060,7 @@ elements.manageMemoryButton.addEventListener("click", openMemoryManager);
 elements.newButton.addEventListener("click", () => resetToInput());
 elements.attachButton.addEventListener("click", addFiles);
 elements.captureButton.addEventListener("click", captureScreen);
+elements.readScreenButton.addEventListener("click", () => api.readScreen());
 elements.enhanceButton.addEventListener("click", () => requestEnhancement());
 elements.guessButton.addEventListener("click", requestGuess);
 elements.guessBackButton.addEventListener("click", () => setView("input"));
@@ -1207,6 +1212,7 @@ elements.windowWidthInput.addEventListener("input", previewDisplaySettings);
 elements.windowHeightInput.addEventListener("input", previewDisplaySettings);
 elements.windowMode.addEventListener("change", previewDisplaySettings);
 elements.copyOfferInput.addEventListener("change", previewDisplaySettings);
+elements.screenReadFallbackInput.addEventListener("change", previewDisplaySettings);
 elements.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   elements.settingsError.textContent = "";

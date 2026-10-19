@@ -5,9 +5,11 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.BitmapRegionDecoder
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -24,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.example.writingenhancer.data.WorkspacePolicy
 import com.example.writingenhancer.overlay.OverlayService
+import com.example.writingenhancer.process.EnhanceSelectionActivity
 import java.io.File
 import java.io.FileOutputStream
 import java.util.UUID
@@ -31,15 +34,23 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** User-visible preview and drag selection for a one-shot side-chat visual search. */
+/**
+ * User-visible preview and drag selection for a one-shot side-chat visual search.
+ * In read mode ("화면 글 읽기") the chosen part is handed to the 글 강화 dialog, which reads its text.
+ */
 class ImageCropActivity : Activity() {
     private var completionDispatched = false
+    private var readMode = false
+    // 미리보기는 줄여서 열 수 있으므로, 읽기용으로 자를 때는 원래 크기를 기준으로 한다.
+    private var originalWidth = 0
+    private var originalHeight = 0
     private var sourceBitmap: Bitmap? = null
     private lateinit var cropView: CropSelectionView
     private lateinit var originalFile: File
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        readMode = intent.getStringExtra(EXTRA_MODE) == MODE_READ
         val source = resolveSourceFile(intent.getStringExtra(EXTRA_PATH))
         if (source == null) {
             cancelAndFinish("이미지 파일을 찾지 못했어요.")
@@ -76,7 +87,7 @@ class ImageCropActivity : Activity() {
         }
         root.addView(
             TextView(this).apply {
-                text = "검색 전 이미지 확인"
+                text = if (readMode) "읽을 부분 고르기" else "검색 전 이미지 확인"
                 textSize = 20f
                 setTextColor(Color.WHITE)
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
@@ -84,7 +95,11 @@ class ImageCropActivity : Activity() {
         )
         root.addView(
             TextView(this).apply {
-                text = "필요한 부분을 드래그하세요. 전체 이미지를 쓰려면 ‘전체 사용’을 누르세요."
+                text = if (readMode) {
+                    "글자가 있는 부분을 드래그하세요. 화면 전체를 읽으려면 ‘전체 읽기’를 누르세요."
+                } else {
+                    "필요한 부분을 드래그하세요. 전체 이미지를 쓰려면 ‘전체 사용’을 누르세요."
+                }
                 textSize = 13f
                 setTextColor(0xFFCCC7D5.toInt())
                 setPadding(0, dp(5), 0, dp(10))
@@ -105,13 +120,15 @@ class ImageCropActivity : Activity() {
         }
         actions.addView(actionButton("취소", 0xFF34313D.toInt()) { finishKeepingOriginal() })
         actions.addView(
-            actionButton("전체 사용", 0xFF484353.toInt()) { finishKeepingOriginal() },
+            actionButton(if (readMode) "전체 읽기" else "전체 사용", 0xFF484353.toInt()) {
+                if (readMode) readImage(originalFile) else finishKeepingOriginal()
+            },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)).apply {
                 marginStart = dp(7)
             },
         )
         actions.addView(
-            actionButton("선택 사용", 0xFF6E56CF.toInt()) { saveSelection() },
+            actionButton(if (readMode) "선택 읽기" else "선택 사용", 0xFF6E56CF.toInt()) { saveSelection() },
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(48)).apply {
                 marginStart = dp(7)
             },
@@ -150,18 +167,36 @@ class ImageCropActivity : Activity() {
     }
 
     private fun saveSelection() {
-        val selected = cropView.selectedBitmap()
+        val selected = if (readMode) {
+            cropView.selectedFraction()?.let { runCatching { decodeOriginalRegion(it) }.getOrNull() }
+                ?: cropView.selectedBitmap()
+        } else {
+            cropView.selectedBitmap()
+        }
         if (selected == null) {
-            Toast.makeText(this, "검색할 영역을 조금 더 크게 선택해 주세요.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                this,
+                if (readMode) "읽을 부분을 조금 더 크게 선택해 주세요." else "검색할 영역을 조금 더 크게 선택해 주세요.",
+                Toast.LENGTH_SHORT,
+            ).show()
             return
         }
-        val directory = File(filesDir, BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY).apply { mkdirs() }
+        val directory = if (readMode) {
+            ScreenReadFiles.directory(this)
+        } else {
+            File(filesDir, BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY)
+        }.apply { mkdirs() }
         val output = File(directory, "선택-${UUID.randomUUID()}.png")
         val saved = runCatching { writeBoundedPng(selected, output) }.getOrDefault(false)
         selected.recycle()
         if (!saved) {
             output.delete()
             Toast.makeText(this, "선택 영역을 8MB 이하로 준비하지 못했어요.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (readMode) {
+            runCatching { originalFile.delete() }
+            readImage(output)
             return
         }
         val result = Intent(this, OverlayService::class.java)
@@ -182,6 +217,20 @@ class ImageCropActivity : Activity() {
         finishWithoutAnimation()
     }
 
+    // 고른 이미지(또는 화면 전체)를 글 강화 창에 넘긴다. 그 창이 글을 읽은 뒤 이미지를 지운다.
+    private fun readImage(image: File) {
+        val reader = Intent(this, EnhanceSelectionActivity::class.java)
+            .putExtra(EnhanceSelectionActivity.EXTRA_IMAGE_PATH, image.absolutePath)
+        val opened = runCatching { startActivity(reader) }.isSuccess
+        if (!opened) {
+            runCatching { image.delete() }
+            Toast.makeText(this, "글 강화 창을 열지 못했어요.", Toast.LENGTH_SHORT).show()
+            notifyCancelled()
+        }
+        completionDispatched = true
+        finishWithoutAnimation()
+    }
+
     private fun cancelAndFinish(message: String) {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
         notifyCancelled()
@@ -190,11 +239,16 @@ class ImageCropActivity : Activity() {
 
     private fun notifyCancelled() {
         if (completionDispatched) return
+        // 읽기를 취소하면 찍어 둔 화면을 남기지 않는다.
+        if (readMode && ::originalFile.isInitialized) runCatching { originalFile.delete() }
         OverlayService.startIfMarkedRunning(
             this,
             Intent(this, OverlayService::class.java)
                 .setAction(OverlayService.ACTION_CAPTURE_CANCELLED)
-                .putExtra(OverlayService.EXTRA_TARGET, BridgeActivity.TARGET_SIDE_CHAT_VISUAL),
+                .putExtra(
+                    OverlayService.EXTRA_TARGET,
+                    if (readMode) BridgeActivity.TARGET_READ_TEXT else BridgeActivity.TARGET_SIDE_CHAT_VISUAL,
+                ),
         )
         completionDispatched = true
     }
@@ -206,6 +260,7 @@ class ImageCropActivity : Activity() {
     }
 
     private fun resolveSourceFile(path: String?): File? {
+        if (readMode) return ScreenReadFiles.resolve(this, path)
         val root = File(filesDir, BridgeActivity.SIDE_CHAT_CAPTURE_DIRECTORY)
         val candidate = path?.let(::File) ?: return null
         val rootPath = runCatching { root.canonicalPath }.getOrNull() ?: return null
@@ -215,10 +270,32 @@ class ImageCropActivity : Activity() {
         }
     }
 
+    // 고른 부분(이미지 대비 비율)을 원래 파일에서 원래 해상도로 잘라 낸다.
+    private fun decodeOriginalRegion(fraction: RectF): Bitmap? {
+        if (originalWidth <= 0 || originalHeight <= 0) return null
+        val left = (fraction.left * originalWidth).roundToInt().coerceIn(0, originalWidth - 1)
+        val top = (fraction.top * originalHeight).roundToInt().coerceIn(0, originalHeight - 1)
+        val right = (fraction.right * originalWidth).roundToInt().coerceIn(left + 1, originalWidth)
+        val bottom = (fraction.bottom * originalHeight).roundToInt().coerceIn(top + 1, originalHeight)
+        val decoder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            BitmapRegionDecoder.newInstance(originalFile.absolutePath)
+        } else {
+            @Suppress("DEPRECATION")
+            BitmapRegionDecoder.newInstance(originalFile.absolutePath, false)
+        } ?: return null
+        return try {
+            decoder.decodeRegion(Rect(left, top, right, bottom), null)
+        } finally {
+            decoder.recycle()
+        }
+    }
+
     private fun decodeBounded(file: File): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(file.absolutePath, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        originalWidth = bounds.outWidth
+        originalHeight = bounds.outHeight
         var sample = 1
         while (bounds.outWidth / sample > 2_048 || bounds.outHeight / sample > 2_048) sample *= 2
         return BitmapFactory.decodeFile(
@@ -276,6 +353,8 @@ class ImageCropActivity : Activity() {
         const val EXTRA_PATH = "crop_path"
         const val EXTRA_NAME = "crop_name"
         const val EXTRA_SOURCE = "crop_source"
+        const val EXTRA_MODE = "crop_mode"
+        const val MODE_READ = "read"
     }
 }
 
@@ -354,6 +433,18 @@ private class CropSelectionView(context: Context) : View(context) {
     }
 
     override fun performClick(): Boolean = super.performClick()
+
+    /** 고른 부분을 이미지 대비 비율(0~1)로 돌려준다. 너무 작으면 null. */
+    fun selectedFraction(): RectF? {
+        if (bitmap == null) return null
+        if (selection.width() < dp(24f) || selection.height() < dp(24f)) return null
+        return RectF(
+            ((selection.left - imageRect.left) / imageRect.width()).coerceIn(0f, 1f),
+            ((selection.top - imageRect.top) / imageRect.height()).coerceIn(0f, 1f),
+            ((selection.right - imageRect.left) / imageRect.width()).coerceIn(0f, 1f),
+            ((selection.bottom - imageRect.top) / imageRect.height()).coerceIn(0f, 1f),
+        )
+    }
 
     fun selectedBitmap(): Bitmap? {
         val source = bitmap ?: return null

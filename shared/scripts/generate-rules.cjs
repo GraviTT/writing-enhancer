@@ -603,6 +603,33 @@ function validateWritingRules(writing) {
     if (labels.has(situation.label)) fail(`상황 이름이 겹칩니다: ${situation.label}`);
     labels.add(situation.label);
   }
+  const lines = (value, name) => {
+    if (!Array.isArray(value) || value.length === 0 || value.some((line) => typeof line !== "string")) {
+      fail(`${name}는 글 줄 목록이어야 합니다.`);
+    }
+  };
+  const imageText = writing.imageText;
+  lines(imageText?.system, "imageText.system");
+  if (typeof imageText.user !== "string" || !imageText.user.trim()) fail("imageText.user가 비어 있습니다.");
+  if (!Number.isInteger(imageText.maxCharacters) || imageText.maxCharacters <= 0) {
+    fail("imageText.maxCharacters는 양의 정수여야 합니다.");
+  }
+  const translation = writing.translation;
+  lines(translation?.system, "translation.system");
+  lines(translation?.user, "translation.user");
+  const userTemplate = translation.user.join("\n");
+  for (const name of ["target", "situation", "input"]) {
+    if (!userTemplate.includes(`{${name}}`)) fail(`translation.user에 {${name}} 자리가 없습니다.`);
+  }
+  if (!Array.isArray(translation.targets) || translation.targets.length === 0) fail("translation.targets가 비어 있습니다.");
+  const codes = new Set();
+  for (const target of translation.targets) {
+    if (!/^[a-z]{2}$/u.test(String(target?.code))) fail(`번역 언어 코드가 올바르지 않습니다: ${target?.code}`);
+    if (typeof target.label !== "string" || !target.label.trim()) fail(`번역 언어 이름이 비어 있습니다: ${target.code}`);
+    if (codes.has(target.code)) fail(`번역 언어가 겹칩니다: ${target.code}`);
+    codes.add(target.code);
+  }
+  if (!codes.has("ko")) fail("번역 언어에 한국어(ko)가 있어야 합니다.");
 }
 
 function writingData(writing) {
@@ -612,7 +639,17 @@ function writingData(writing) {
       enhance: writing.speechLevel.enhance.join("\n"),
       guess: writing.speechLevel.guess
     },
-    selection: writing.selection
+    selection: writing.selection,
+    imageText: {
+      systemPrompt: writing.imageText.system.join("\n"),
+      userPrompt: writing.imageText.user,
+      maxCharacters: writing.imageText.maxCharacters
+    },
+    translation: {
+      targets: writing.translation.targets,
+      systemPrompt: writing.translation.system.join("\n"),
+      userPromptTemplate: writing.translation.user.join("\n")
+    }
   };
 }
 
@@ -641,11 +678,17 @@ function renderAndroidWritingRules(data) {
     data.selection.situations,
     (situation) => `Situation(${kt(situation.label)}, ${kt(situation.text)})`
   );
+  const targets = ktList(
+    data.translation.targets,
+    (target) => `TranslationTarget(${kt(target.code)}, ${kt(target.label)})`
+  );
   return `${HEADER_LINES.map((line) => `// ${line}`).join("\n")}
 package com.example.writingenhancer.ai
 
 object SharedWritingRules {
     data class Situation(val label: String, val text: String)
+
+    data class TranslationTarget(val code: String, val label: String)
 
     const val VERSION = ${data.version}
     const val ENHANCE_SPEECH_LEVEL = ${kt(data.speechLevel.enhance)}
@@ -660,6 +703,19 @@ object SharedWritingRules {
 
     val SITUATIONS: List<Situation> = listOf(
 ${situations}
+    )
+
+    // 드래그할 수 없는 글을 화면 이미지로 읽는 요청
+    const val IMAGE_TEXT_SYSTEM = ${kt(data.imageText.systemPrompt)}
+    const val IMAGE_TEXT_USER = ${kt(data.imageText.userPrompt)}
+    const val IMAGE_TEXT_MAX_CHARACTERS = ${data.imageText.maxCharacters}
+
+    // 번역 요청. USER 틀의 {target}·{situation}·{input} 자리를 채운다.
+    const val TRANSLATION_SYSTEM = ${kt(data.translation.systemPrompt)}
+    const val TRANSLATION_USER_TEMPLATE = ${kt(data.translation.userPromptTemplate)}
+
+    val TRANSLATION_TARGETS: List<TranslationTarget> = listOf(
+${targets}
     )
 }
 `;

@@ -453,6 +453,103 @@ function normalizeGuess(value) {
   };
 }
 
+// ── 화면 글 읽기·번역 ─────────────────────────────────────
+// 지시문은 shared/rules/writing-rules.json에서 Android와 함께 쓴다.
+
+const IMAGE_TEXT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    text: { type: "string", description: "이미지에서 읽은 글. 없으면 빈 문자열" },
+    language: { type: "string", description: "본문의 주 언어 ISO 639-1 코드" },
+    language_name: { type: "string", description: "본문 언어의 한국어 이름" }
+  },
+  required: ["text", "language", "language_name"]
+};
+
+const TRANSLATION_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    translated_text: { type: "string", description: "설명 없이 번역문만" }
+  },
+  required: ["translated_text"]
+};
+
+function translationTarget(code) {
+  const wanted = String(code ?? "").trim().toLowerCase();
+  return (
+    writingRules.translation.targets.find((target) => target.code === wanted) ||
+    writingRules.translation.targets.find((target) => target.code === "ko")
+  );
+}
+
+function buildImageTextPrompt() {
+  return writingRules.imageText.userPrompt;
+}
+
+function buildTranslationPrompt({ input, targetLanguage, situation = "" }) {
+  return fillTemplate(writingRules.translation.userPromptTemplate, {
+    target: translationTarget(targetLanguage).label,
+    situation: String(situation || "").trim() || "없음",
+    input: String(input || "").trim()
+  });
+}
+
+function normalizeImageText(value) {
+  const text = String(value?.text ?? "")
+    .replace(/\r\n?/gu, "\n")
+    .trim()
+    .slice(0, writingRules.imageText.maxCharacters);
+  const language = text ? String(value?.language ?? "").trim().toLowerCase().slice(0, 8) : "";
+  const languageName = text ? String(value?.language_name ?? value?.languageName ?? "").trim().slice(0, 20) : "";
+  return { text, language, languageName };
+}
+
+function normalizeTranslation(value) {
+  const translatedText = String(value?.translated_text ?? value?.translatedText ?? "").trim();
+  if (!translatedText) throw new Error("AI가 번역문을 반환하지 않았습니다.");
+  return { translatedText };
+}
+
+// 구조화된 응답(JSON 스키마)을 받는 요청 종류. 사이드 채팅(chat)은 따로 스트리밍으로 처리한다.
+const STRUCTURED_MODES = {
+  enhance: {
+    system: () => SYSTEM_PROMPT,
+    prompt: (payload) => buildUserPrompt(payload),
+    schema: OUTPUT_SCHEMA,
+    name: "writing_enhancer_result",
+    normalize: (value) => normalizeResult(value),
+    timeoutMs: 35_000
+  },
+  guess: {
+    system: () => GUESS_SYSTEM_PROMPT,
+    prompt: (payload) => buildGuessPrompt(payload),
+    schema: GUESS_SCHEMA,
+    name: "writing_enhancer_question",
+    normalize: (value) => normalizeGuess(value),
+    timeoutMs: 35_000
+  },
+  readText: {
+    system: () => writingRules.imageText.systemPrompt,
+    prompt: () => buildImageTextPrompt(),
+    schema: IMAGE_TEXT_SCHEMA,
+    name: "writing_enhancer_image_text",
+    normalize: (value) => normalizeImageText(value),
+    // 작은 글자를 읽어야 하므로 이미지를 원래 해상도로 보낸다.
+    imageDetail: "high",
+    timeoutMs: 60_000
+  },
+  translate: {
+    system: () => writingRules.translation.systemPrompt,
+    prompt: (payload) => buildTranslationPrompt(payload),
+    schema: TRANSLATION_SCHEMA,
+    name: "writing_enhancer_translation",
+    normalize: (value) => normalizeTranslation(value),
+    timeoutMs: 45_000
+  }
+};
+
 function normalizeWebSource(value) {
   const rawUrl = String(value?.url ?? value?.uri ?? value?.web?.uri ?? "").trim();
   if (!rawUrl) return null;
@@ -819,6 +916,34 @@ class AIClient {
     return this.#run("chat", prepareChatPayload(payload));
   }
 
+  /** 화면에서 잘라 낸 이미지 한 장의 글자를 읽는다. 결과: { text, language, languageName } */
+  async readImageText({ attachment, signal } = {}) {
+    const attachments = normalizeAttachments(attachment ? [attachment] : []);
+    if (attachments.length !== 1 || attachments[0].kind !== "image") {
+      const error = new Error("읽을 화면 이미지가 없어요.");
+      error.code = "INVALID_IMAGE";
+      throw error;
+    }
+    return this.#run("readText", { attachments, signal });
+  }
+
+  /** 글을 지정한 언어(ko·en·ja·zh)로 번역한다. 결과: { translatedText } */
+  async translate({ input, targetLanguage = "ko", situation = "", signal } = {}) {
+    const text = String(input || "").trim();
+    if (!text) {
+      const error = new Error("번역할 글을 먼저 적어 주세요.");
+      error.code = "EMPTY_INPUT";
+      throw error;
+    }
+    return this.#run("translate", {
+      input: text,
+      targetLanguage: translationTarget(targetLanguage).code,
+      situation,
+      attachments: [],
+      signal
+    });
+  }
+
   async #run(mode, payload) {
     const attempts = [];
     const openAIKey = this.getApiKey("openai");
@@ -885,6 +1010,14 @@ class AIClient {
           screenError.code = "SCREEN_CONTEXT_UNAVAILABLE";
           throw screenError;
         }
+        // 사이드 채팅의 화면처럼, 화면에서 잘라 낸 이미지도 다른 AI에 다시 보내지 않는다.
+        if (mode === "readText") {
+          const readError = new Error(
+            "화면의 글을 읽지 못했어요. 이미지는 저장하지 않았으니 다시 캡처해 주세요."
+          );
+          readError.code = "IMAGE_TEXT_UNAVAILABLE";
+          throw readError;
+        }
       }
     }
     if (mode === "chat" && payload.searchRequired) {
@@ -900,14 +1033,13 @@ class AIClient {
   }
 
   async #callOpenAI(apiKey, mode, payload) {
-    const prompt =
-      mode === "guess"
-        ? buildGuessPrompt(payload)
-        : mode === "chat"
-          ? buildSideChatPrompt(payload)
-          : buildUserPrompt(payload);
-    const schema = mode === "guess" ? GUESS_SCHEMA : OUTPUT_SCHEMA;
-    const userContent = toOpenAIContent(prompt, payload.attachments);
+    const spec = STRUCTURED_MODES[mode];
+    const userContent = toOpenAIContent(spec.prompt(payload), payload.attachments);
+    if (spec.imageDetail) {
+      for (const part of userContent) {
+        if (part?.type === "input_image") part.detail = spec.imageDetail;
+      }
+    }
     const request = {
       model: OPENAI_MODEL,
       store: false,
@@ -917,7 +1049,7 @@ class AIClient {
           content: [
             {
               type: "input_text",
-              text: mode === "guess" ? GUESS_SYSTEM_PROMPT : SYSTEM_PROMPT
+              text: spec.system()
             }
           ]
         },
@@ -931,9 +1063,9 @@ class AIClient {
         verbosity: "low",
         format: {
           type: "json_schema",
-          name: mode === "guess" ? "writing_enhancer_question" : "writing_enhancer_result",
+          name: spec.name,
           strict: true,
-          schema
+          schema: spec.schema
         }
       }
     };
@@ -948,12 +1080,10 @@ class AIClient {
         },
         body: JSON.stringify(request)
       },
-      35_000,
+      spec.timeoutMs,
       payload.signal
     );
-    const parsed = parseJsonText(extractOpenAIText(response));
-    if (mode === "guess") return normalizeGuess(parsed);
-    return normalizeResult(parsed);
+    return spec.normalize(parseJsonText(extractOpenAIText(response)));
   }
 
   // 사이드 채팅: 일반 글 답변을 스트리밍으로 받고, 끝난 뒤 인용 위치와 검색 기록을 정리한다.
@@ -1109,30 +1239,24 @@ class AIClient {
   }
 
   async #callGemini(apiKey, mode, payload) {
-    const prompt =
-      mode === "guess"
-        ? buildGuessPrompt(payload)
-        : mode === "chat"
-          ? buildSideChatPrompt(payload)
-          : buildUserPrompt(payload);
-    const schema = mode === "guess" ? GUESS_SCHEMA : OUTPUT_SCHEMA;
+    const spec = STRUCTURED_MODES[mode];
     const request = {
       systemInstruction: {
         parts: [
           {
-            text: mode === "guess" ? GUESS_SYSTEM_PROMPT : SYSTEM_PROMPT
+            text: spec.system()
           }
         ]
       },
       contents: [
         {
           role: "user",
-          parts: toGeminiParts(prompt, payload.attachments)
+          parts: toGeminiParts(spec.prompt(payload), payload.attachments)
         }
       ],
       generationConfig: {
         responseMimeType: "application/json",
-        responseJsonSchema: toGeminiSchema(schema)
+        responseJsonSchema: toGeminiSchema(spec.schema)
       }
     };
     const requestBody = JSON.stringify(request);
@@ -1152,12 +1276,10 @@ class AIClient {
         },
         body: requestBody
       },
-      35_000,
+      spec.timeoutMs,
       payload.signal
     );
-    const parsed = parseJsonText(extractGeminiText(response));
-    if (mode === "guess") return normalizeGuess(parsed);
-    return normalizeResult(parsed);
+    return spec.normalize(parseJsonText(extractGeminiText(response)));
   }
 }
 
@@ -1168,10 +1290,16 @@ module.exports = {
   MAX_GEMINI_REQUEST_BYTES,
   GUESS_SCHEMA,
   GUESS_SYSTEM_PROMPT,
+  IMAGE_TEXT_SCHEMA,
+  TRANSLATION_SCHEMA,
   OPENAI_MODEL,
   OUTPUT_SCHEMA,
   SYSTEM_PROMPT,
   buildGuessPrompt,
+  buildImageTextPrompt,
+  buildTranslationPrompt,
+  normalizeImageText,
+  normalizeTranslation,
   buildSideChatPrompt,
   buildUserPrompt,
   buildSources,

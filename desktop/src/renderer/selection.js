@@ -9,9 +9,12 @@
   const levels = window.enhancementLevels;
   const rules = window.writingRules;
   const presets = window.situationPresets;
+  const textLanguage = window.textLanguage;
   const panel = () => window.writingPanel;
   const STORAGE_KEY = "writing-enhancer.selection-level";
+  const TARGET_STORAGE_KEY = "writing-enhancer.selection-target";
   const ORIGINAL_MAX_HEIGHT = 168;
+  const TARGETS = rules.translation.targets;
 
   const $ = (id) => document.querySelector(`#${id}`);
   const el = {
@@ -20,6 +23,12 @@
     source: $("selectionSource"),
     original: $("selectionOriginal"),
     options: $("selectionOptions"),
+    modeEnhance: $("selectionModeEnhance"),
+    modeTranslate: $("selectionModeTranslate"),
+    levelBlock: $("selectionLevelBlock"),
+    targetBlock: $("selectionTargetBlock"),
+    targets: $("selectionTargets"),
+    loadingText: $("selectionLoadingText"),
     levels: $("selectionLevels"),
     levelHint: $("selectionLevelHint"),
     situationToggle: $("selectionSituationToggle"),
@@ -60,7 +69,14 @@
     previousView: "input",
     situations: presets.defaults(),
     customized: false,
-    editingSituations: false
+    editingSituations: false,
+    // "enhance"(강화하기) 또는 "translate"(번역하기)
+    mode: "enhance",
+    target: "ko",
+    // 화면에서 읽은 글이면 AI가 알려 준 언어
+    language: "",
+    languageName: "",
+    reading: false
   };
 
   function loadLevel() {
@@ -80,8 +96,67 @@
     }
   }
 
+  function loadTarget() {
+    try {
+      const saved = window.localStorage.getItem(TARGET_STORAGE_KEY);
+      return TARGETS.some((target) => target.code === saved) ? saved : "en";
+    } catch {
+      return "en";
+    }
+  }
+
+  function saveTarget(code) {
+    try {
+      window.localStorage.setItem(TARGET_STORAGE_KEY, code);
+    } catch {
+      // 저장소를 쓸 수 없으면 다음에 기본 언어로 연다.
+    }
+  }
+
+  function targetLabel(code = state.target) {
+    return (TARGETS.find((target) => target.code === code) || TARGETS[0]).label;
+  }
+
   function isOpen() {
     return !el.view.classList.contains("is-hidden");
+  }
+
+  // ── 강화하기 / 번역하기 ─────────────────────────────────
+
+  function renderTargets() {
+    el.targets.replaceChildren();
+    for (const target of TARGETS) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "situation-chip target-chip";
+      chip.textContent = target.label;
+      chip.dataset.code = target.code;
+      chip.setAttribute("role", "radio");
+      chip.addEventListener("click", () => setTarget(target.code, { remember: true }));
+      el.targets.append(chip);
+    }
+  }
+
+  function setTarget(code, { remember = false } = {}) {
+    state.target = TARGETS.some((target) => target.code === code) ? code : "ko";
+    for (const chip of el.targets.children) {
+      const selected = chip.dataset.code === state.target;
+      chip.classList.toggle("is-selected", selected);
+      chip.setAttribute("aria-checked", String(selected));
+    }
+    if (remember && state.target !== "ko") saveTarget(state.target);
+  }
+
+  function setMode(mode) {
+    state.mode = mode === "translate" ? "translate" : "enhance";
+    const translating = state.mode === "translate";
+    el.modeEnhance.classList.toggle("is-selected", !translating);
+    el.modeTranslate.classList.toggle("is-selected", translating);
+    el.modeEnhance.setAttribute("aria-selected", String(!translating));
+    el.modeTranslate.setAttribute("aria-selected", String(translating));
+    el.levelBlock.classList.toggle("is-hidden", translating);
+    el.targetBlock.classList.toggle("is-hidden", !translating);
+    el.enhance.querySelector("span").textContent = translating ? "번역하기" : "강화하기";
   }
 
   function show(part) {
@@ -100,12 +175,15 @@
     const count = `${currentInput().length.toLocaleString("ko-KR")}자`;
     const origin = state.targetLabel
       ? `${state.targetLabel}에서 가져온 글`
-      : state.source === "clipboard"
-        ? "복사한 글"
-        : state.source === "context-menu"
-          ? "글 강화기에서 선택한 글"
-          : "선택한 글";
-    return `${origin} · ${count} · 고쳐 써도 돼요`;
+      : state.source === "screen"
+        ? "화면에서 읽은 글"
+        : state.source === "clipboard"
+          ? "복사한 글"
+          : state.source === "context-menu"
+            ? "글 강화기에서 선택한 글"
+            : "선택한 글";
+    const language = state.languageName ? ` · ${state.languageName}` : "";
+    return `${origin}${language} · ${count} · 고쳐 써도 돼요`;
   }
 
   function growOriginal() {
@@ -312,17 +390,25 @@
       targetLabel: String(payload.targetLabel || "").trim(),
       canReplace: payload.canReplace === true,
       source: String(payload.source || ""),
+      language: String(payload.language || ""),
+      languageName: String(payload.languageName || ""),
+      reading: false,
       busy: false,
       versions: [],
       historyId: "",
       editingSituations: false
     });
     hideOffer();
+    el.original.disabled = false;
     el.original.value = text;
     el.situationInput.value = "";
     setSituationOpen(false);
     renderSituations();
     setLevel(state.level);
+    // 외국어 글이면 처음부터 한국어 번역으로 맞춰 둔다.
+    const foreign = textLanguage.suggestsTranslation(text, state.language);
+    setMode(foreign ? "translate" : "enhance");
+    setTarget(foreign ? "ko" : loadTarget());
     renderReplaceButton();
     show("options");
     panel().showSurface("writing");
@@ -335,8 +421,30 @@
   function close() {
     state.requestId += 1;
     state.busy = false;
+    state.reading = false;
     if (!isOpen()) return;
     panel().setView(state.previousView === "loading" ? "input" : state.previousView);
+  }
+
+  // 화면에서 고른 부분을 AI가 읽는 동안 보여 준다. 다 읽으면 open()이 글을 채운다.
+  function beginReading() {
+    if (!isOpen()) state.previousView = panel().currentView();
+    state.requestId += 1;
+    state.reading = true;
+    hideOffer();
+    el.source.textContent = "화면에서 고른 부분";
+    el.original.value = "";
+    el.original.disabled = true;
+    el.loadingText.textContent = "화면에서 글을 읽고 있어요";
+    show("loading");
+    panel().showSurface("writing");
+    panel().setView("selection");
+  }
+
+  function readFailed({ message } = {}) {
+    if (state.reading) close();
+    el.original.disabled = false;
+    panel().showToast(message || "화면의 글을 읽지 못했어요.", { duration: 8_000 });
   }
 
   function focus() {
@@ -347,17 +455,44 @@
   // ── 강화 ────────────────────────────────────────────────
 
   function summaryText(version) {
+    if (version.mode === "translate") {
+      const base = `번역 · ${targetLabel(version.target)}`;
+      return version.situation ? `${base} · ${version.situation}` : base;
+    }
     const definition = levels.definition(version.enhancementLevel);
     return version.situation
       ? `${definition.value}단계 ${definition.label} · ${version.situation}`
       : `${definition.value}단계 ${definition.label}`;
   }
 
-  async function enhance() {
+  // 기록 목록에서 무엇을 했는지 알 수 있게, 번역이면 상황 칸에 옮긴 언어를 남긴다.
+  function historySituation(version) {
+    if (version.mode !== "translate") return version.situation;
+    const base = `번역 → ${targetLabel(version.target)}`;
+    return version.situation ? `${base} · ${version.situation}` : base;
+  }
+
+  function renderModeLabels() {
+    const translating = state.versions.at(-1)?.mode === "translate";
+    el.again.textContent = translating ? "다시 번역" : "다시 강화";
+  }
+
+  function showFailure(response) {
+    show(state.versions.length > 0 ? "result" : "options");
+    const error = response?.error || { message: "잠시 연결하지 못했어요." };
+    const needsKey = error.code === "NO_API_KEY";
+    panel().showToast(error.message, {
+      actionLabel: needsKey ? "설정" : undefined,
+      onAction: needsKey ? () => panel().openSettings() : undefined,
+      duration: 7_000
+    });
+  }
+
+  async function run() {
     if (state.busy) return;
     const input = currentInput();
     if (!input) {
-      panel().showToast("강화할 글이 비어 있어요.");
+      panel().showToast(state.mode === "translate" ? "번역할 글이 비어 있어요." : "강화할 글이 비어 있어요.");
       el.original.focus();
       return;
     }
@@ -369,41 +504,38 @@
     }
     const requestId = ++state.requestId;
     const situation = situationValue();
+    const mode = state.mode;
+    const target = state.target;
     const enhancementLevel = state.level;
     state.busy = true;
+    el.loadingText.textContent =
+      mode === "translate" ? `${targetLabel(target)}로 옮기고 있어요` : "선택한 글을 강화하고 있어요";
     show("loading");
-    const response = await api.enhance({
-      input,
-      situation,
-      enhancementLevel,
-      followUpMode: "first",
-      attachments: []
-    });
+    const response =
+      mode === "translate"
+        ? await api.translate({ input, targetLanguage: target, situation })
+        : await api.enhance({ input, situation, enhancementLevel, followUpMode: "first", attachments: [] });
     if (requestId !== state.requestId) return;
     state.busy = false;
     if (!response?.ok) {
-      show(state.versions.length > 0 ? "result" : "options");
-      const error = response?.error || { message: "잠시 연결하지 못했어요." };
-      const needsKey = error.code === "NO_API_KEY";
-      panel().showToast(error.message, {
-        actionLabel: needsKey ? "설정" : undefined,
-        onAction: needsKey ? () => panel().openSettings() : undefined,
-        duration: 7_000
-      });
+      showFailure(response);
       return;
     }
     // 이 화면은 기억 추가를 묻지 않는다.
     if (response.result.memoryApprovalToken) api.rejectMemoryCandidates(response.result.memoryApprovalToken);
     const version = {
-      completedText: response.result.completedText,
-      followUp: response.result.followUp,
+      completedText: mode === "translate" ? response.result.translatedText : response.result.completedText,
+      followUp: mode === "translate" ? "" : response.result.followUp,
       enhancementLevel,
       situation,
+      mode,
+      target,
       createdAt: new Date().toISOString()
     };
     state.versions.push(version);
     el.summary.textContent = summaryText(version);
     el.resultText.value = version.completedText;
+    renderModeLabels();
     show("result");
     el.resultText.focus();
     await saveHistory();
@@ -421,10 +553,10 @@
     if (edited) latest.completedText = edited;
     const response = await api.saveHistory({
       id: state.historyId,
-      situation: latest.situation,
+      situation: historySituation(latest),
       input: state.text,
       attachmentNames: [],
-      versions: state.versions.map(({ situation: _situation, ...version }) => version),
+      versions: state.versions.map(({ situation: _situation, mode: _mode, target: _target, ...version }) => version),
       versionIndex: state.versions.length - 1
     });
     if (response?.ok) state.historyId = response.record.id;
@@ -510,6 +642,9 @@
 
   loadLevel();
   renderLevels();
+  renderTargets();
+  setTarget(loadTarget());
+  setMode("enhance");
   setLevel(state.level);
   renderSituations();
   renderSituationToggle();
@@ -532,7 +667,7 @@
     field.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
         event.preventDefault();
-        enhance();
+        run();
       }
     });
   }
@@ -540,13 +675,24 @@
   el.situationEdit.addEventListener("click", () => setEditing(!state.editingSituations));
   el.situationReset.addEventListener("click", resetSituations);
   el.back.addEventListener("click", close);
-  el.enhance.addEventListener("click", enhance);
-  el.again.addEventListener("click", enhance);
+  el.enhance.addEventListener("click", run);
+  el.again.addEventListener("click", () => {
+    const latest = state.versions.at(-1);
+    if (latest) {
+      setMode(latest.mode);
+      setTarget(latest.target);
+    }
+    run();
+  });
+  el.modeEnhance.addEventListener("click", () => setMode("enhance"));
+  el.modeTranslate.addEventListener("click", () => setMode("translate"));
   el.edit.addEventListener("click", () => {
     const latest = state.versions.at(-1);
     if (latest) {
       el.situationInput.value = latest.situation;
       setLevel(latest.enhancementLevel);
+      setMode(latest.mode);
+      setTarget(latest.target);
     }
     show("options");
     setSituationOpen(Boolean(latest?.situation));
@@ -560,6 +706,8 @@
   el.offerDismiss.addEventListener("click", hideOffer);
 
   api.onSelectionOpen(open);
+  api.onSelectionReading(beginReading);
+  api.onSelectionReadFailed((payload) => readFailed(payload || {}));
   api.onSelectionOffer(showOffer);
   api.onSelectionEmpty((payload) => panel().showToast(emptyMessage(payload || {}), { duration: 8_000 }));
   api.onPanelState(({ expanded }) => {
@@ -579,6 +727,31 @@
       return true;
     },
     showDemo(stage) {
+      if (stage === "screen" || stage === "translate-result") {
+        open({
+          text: "Your order has shipped! Track your package anytime from the Orders page. Delivery usually takes 3-5 business days.",
+          source: "screen",
+          language: "en",
+          languageName: "영어"
+        });
+        if (stage === "translate-result") {
+          const version = {
+            completedText: "주문하신 상품이 발송됐어요! 주문 내역 페이지에서 언제든 배송을 조회할 수 있어요. 배송은 보통 영업일 기준 3~5일 걸려요.",
+            followUp: "",
+            enhancementLevel: 3,
+            situation: "",
+            mode: "translate",
+            target: "ko",
+            createdAt: new Date().toISOString()
+          };
+          state.versions = [version];
+          el.summary.textContent = summaryText(version);
+          el.resultText.value = version.completedText;
+          renderModeLabels();
+          show("result");
+        }
+        return;
+      }
       open({
         text: "내일 회의 자료 아직 못 만들었어. 오늘 밤까지 정리해서 보내 줄게. 미안",
         token: "",
