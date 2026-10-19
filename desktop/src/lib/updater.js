@@ -9,7 +9,7 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { spawnSync } = require("node:child_process");
 
 const REPOSITORY = "GraviTT/writing-enhancer";
 const LATEST_RELEASE_URL = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
@@ -195,35 +195,61 @@ try {
 Start-Process -FilePath $Exe
 `;
 
-function launchInstaller({ zipPath, target, execPath, pid, spawnImpl = spawn }) {
+// PowerShell 글 하나를 작은따옴표로 감싼다(안의 작은따옴표는 두 번 쓴다).
+function quoteForPowerShell(value) {
+  return `'${String(value).replace(/'/gu, "''")}'`;
+}
+
+// Start-Process는 -ArgumentList를 공백으로 이어 붙이므로, 공백이 든 경로는 큰따옴표로 감싼다.
+function installerCommand({ script, pid, zipPath, target, execPath, log }) {
+  const args = [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    script,
+    "-ProcessId",
+    String(pid),
+    "-Zip",
+    zipPath,
+    "-Target",
+    target,
+    "-Exe",
+    execPath,
+    "-Log",
+    log
+  ];
+  const list = args.map((value) => quoteForPowerShell(/\s/u.test(value) ? `"${value}"` : value)).join(", ");
+  return `Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(${list})`;
+}
+
+/**
+ * 앱이 닫힌 뒤에도 돌아야 하는 설치 스크립트를 띄운다.
+ * Node가 보통 방식으로 띄운 자식은 앱이 끝날 때 함께 끝나고(libuv 작업 개체), detached로 띄운
+ * PowerShell은 콘솔이 없어 스크립트를 실행하지 않고 바로 끝난다(0.6.1~0.7.1에서 설치가 안 된 원인).
+ * 그래서 숨겨 띄운 PowerShell이 Start-Process로 설치 스크립트를 따로 띄우고 곧바로 끝나게 한다.
+ * 이렇게 띄운 손주 프로세스는 작업 개체 밖에서 돌아 앱이 끝나도 계속 실행된다.
+ */
+function launchInstaller({ zipPath, target, execPath, pid, spawnSyncImpl = spawnSync }) {
   const directory = path.dirname(zipPath);
   const script = path.join(directory, "install-update.ps1");
   const log = path.join(directory, "install-update.log");
   fs.writeFileSync(script, INSTALL_SCRIPT, "utf8");
-  const child = spawnImpl(
+  const result = spawnSyncImpl(
     "powershell.exe",
     [
       "-NoProfile",
+      "-NonInteractive",
       "-ExecutionPolicy",
       "Bypass",
-      "-WindowStyle",
-      "Hidden",
-      "-File",
-      script,
-      "-ProcessId",
-      String(pid),
-      "-Zip",
-      zipPath,
-      "-Target",
-      target,
-      "-Exe",
-      execPath,
-      "-Log",
-      log
+      "-Command",
+      installerCommand({ script, pid, zipPath, target, execPath, log })
     ],
-    { detached: true, stdio: "ignore", windowsHide: true }
+    { windowsHide: true, timeout: 30_000, encoding: "utf8" }
   );
-  child.unref?.();
+  if (result?.error || result?.status !== 0) {
+    throw new Error("업데이트 설치 프로그램을 시작하지 못했어요. 잠시 뒤 다시 시도해 주세요.");
+  }
   return { script, log };
 }
 
@@ -241,7 +267,7 @@ class UpdateManager {
     notify,
     onState,
     quit,
-    spawnImpl,
+    spawnSyncImpl,
     timers = { setTimeout, setInterval, clearTimeout, clearInterval }
   }) {
     this.currentVersion = currentVersion;
@@ -252,7 +278,7 @@ class UpdateManager {
     this.notify = notify;
     this.onState = onState;
     this.quit = quit;
-    this.spawnImpl = spawnImpl;
+    this.spawnSyncImpl = spawnSyncImpl;
     this.timers = timers;
     this.userAgent = `WritingEnhancer-Windows/${currentVersion}`;
     this.state = { status: "idle", version: "", progress: 0, message: "" };
@@ -284,7 +310,8 @@ class UpdateManager {
     this.onState?.(this.state);
   }
 
-  async check() {
+  // quiet이면 새 버전을 찾아도 알림을 띄우지 않는다(설치 직전 다시 확인할 때).
+  async check({ quiet = false } = {}) {
     if (!this.enabled || ["downloading", "installing"].includes(this.state.status)) return this.update;
     try {
       const update = await checkForUpdate({
@@ -298,7 +325,7 @@ class UpdateManager {
       this.setState({ status: "available", version: update.version, progress: 0, message: "" });
       if (!this.notified.has(update.version)) {
         this.notified.add(update.version);
-        this.notify?.(update);
+        if (!quiet) this.notify?.(update);
       }
       return update;
     } catch {
@@ -313,7 +340,9 @@ class UpdateManager {
       return false;
     }
     if (["downloading", "installing"].includes(this.state.status)) return false;
-    const update = this.update || (await this.check());
+    // 앱을 며칠 켜 두면 예전에 찾은 버전 정보가 남아 있으므로, 받기 직전에 최신 릴리스를 다시 확인한다.
+    // 확인에 실패하면(오프라인 등) 마지막으로 찾은 버전을 받는다.
+    const update = (await this.check({ quiet: true })) || this.update;
     if (!update) return false;
     this.setState({ status: "downloading", version: update.version, progress: 0, message: "" });
     try {
@@ -332,7 +361,7 @@ class UpdateManager {
         target: this.installTarget.directory,
         execPath: this.installTarget.execPath,
         pid: this.installTarget.pid,
-        spawnImpl: this.spawnImpl
+        spawnSyncImpl: this.spawnSyncImpl
       });
       this.quit?.();
       return true;
@@ -351,6 +380,7 @@ module.exports = {
   appAssetName,
   checkForUpdate,
   downloadUpdate,
+  installerCommand,
   isNewer,
   isTrustedDownload,
   launchInstaller,

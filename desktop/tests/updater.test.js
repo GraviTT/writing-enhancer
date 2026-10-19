@@ -163,9 +163,9 @@ test("알림은 버전마다 한 번이고, 누르면 받아서 설치 스크립
       quit: () => {
         quit += 1;
       },
-      spawnImpl: (command, args, options) => {
+      spawnSyncImpl: (command, args, options) => {
         spawned.push({ command, args, options });
-        return { unref() {} };
+        return { status: 0 };
       }
     });
     assert.equal((await manager.check()).version, "0.6.2");
@@ -175,12 +175,22 @@ test("알림은 버전마다 한 번이고, 누르면 받아서 설치 스크립
 
     assert.equal(await manager.install(), true);
     assert.equal(quit, 1);
+    assert.deepEqual(notified, ["0.6.2"]);
     assert.ok(states.includes("downloading"));
     assert.equal(manager.state.status, "installing");
+    // 숨긴 PowerShell이 Start-Process로 설치 스크립트를 따로 띄운다(앱이 닫혀도 계속 돈다).
     const { command, args, options } = spawned[0];
     assert.equal(command, "powershell.exe");
-    assert.equal(options.detached, true);
-    const value = (flag) => args[args.indexOf(flag) + 1];
+    assert.notEqual(options.detached, true);
+    assert.equal(options.windowsHide, true);
+    const launch = args[args.indexOf("-Command") + 1];
+    assert.match(launch, /^Start-Process -FilePath 'powershell\.exe' -WindowStyle Hidden -ArgumentList @\(/u);
+    const items = [...launch.matchAll(/'((?:[^']|'')*)'/gu)]
+      .slice(1)
+      .map((match) => match[1].replace(/''/gu, "'").replace(/^"(.*)"$/u, "$1"));
+    const value = (flag) => items[items.indexOf(flag) + 1];
+    // 공백이 든 경로는 큰따옴표로 감싸 Start-Process가 하나의 인자로 넘긴다.
+    assert.ok(launch.includes(`'"C:\\Apps\\글 강화기\\글 강화기.exe"'`));
     assert.equal(value("-ProcessId"), "4242");
     assert.equal(value("-Target"), "C:\\Apps\\글 강화기");
     assert.equal(value("-Exe"), "C:\\Apps\\글 강화기\\글 강화기.exe");
@@ -288,3 +298,69 @@ test("앱 전용 ZIP은 빌드·배포·설치 스크립트가 같은 이름과 
   assert.match(INSTALL_SCRIPT, /Remove-Item -LiteralPath \$appDir -Recurse -Force/u);
   assert.match(INSTALL_SCRIPT, /robocopy\.exe \$stage \$Target \/E/u);
 });
+
+test("설치를 누르면 최신 릴리스를 다시 확인해, 며칠 전에 찾아 둔 옛 버전을 받지 않는다", async () =>
+  withDirectoryAsync(async (directory) => {
+    const newer = release({ tag_name: "v0.6.3" });
+    newer.assets = newer.assets.map((asset) => ({
+      ...asset,
+      name: asset.name.replace("0.6.2", "0.6.3"),
+      browser_download_url: asset.browser_download_url.replaceAll("0.6.2", "0.6.3")
+    }));
+    const zipBytes = Buffer.from("newest app");
+    const hash = crypto.createHash("sha256").update(zipBytes).digest("hex");
+    const base3 = base.replace("v0.6.2", "v0.6.3");
+    const files = {
+      "https://api.github.com/repos/GraviTT/writing-enhancer/releases/latest": release(),
+      [`${base3}SHA256SUMS.txt`]: `${hash}  Writing-Enhancer-0.6.3-portable.zip\n`,
+      [`${base3}Writing-Enhancer-0.6.3-portable.zip`]: zipBytes
+    };
+    const notified = [];
+    let quit = 0;
+    const manager = new UpdateManager({
+      currentVersion: "0.6.1",
+      fetchImpl: (url, options) => fakeFetch(files).fetchImpl(url, options),
+      tempDirectory: directory,
+      install: { directory: "C:\\Apps", execPath: "C:\\Apps\\a.exe", pid: 7 },
+      notify: (update) => notified.push(update.version),
+      quit: () => {
+        quit += 1;
+      },
+      spawnSyncImpl: () => ({ status: 0 })
+    });
+    assert.equal((await manager.check()).version, "0.6.2");
+    // 그 사이 새 릴리스가 올라왔다.
+    files["https://api.github.com/repos/GraviTT/writing-enhancer/releases/latest"] = newer;
+    assert.equal(await manager.install(), true);
+    assert.equal(manager.state.version, "0.6.3");
+    assert.ok(fs.existsSync(path.join(directory, "writing-enhancer-update", "Writing-Enhancer-0.6.3-portable.zip")));
+    // 설치 직전 확인에서는 알림을 다시 띄우지 않는다.
+    assert.deepEqual(notified, ["0.6.2"]);
+    assert.equal(quit, 1);
+  }));
+
+test("설치 프로그램을 띄우지 못하면 앱을 닫지 않고 다시 시도하게 한다", async () =>
+  withDirectoryAsync(async (directory) => {
+    const zipBytes = Buffer.from("new app");
+    const hash = crypto.createHash("sha256").update(zipBytes).digest("hex");
+    const files = {
+      "https://api.github.com/repos/GraviTT/writing-enhancer/releases/latest": release(),
+      [`${base}SHA256SUMS.txt`]: `${hash}  Writing-Enhancer-0.6.2-portable.zip\n`,
+      [`${base}Writing-Enhancer-0.6.2-portable.zip`]: zipBytes
+    };
+    let quit = 0;
+    const manager = new UpdateManager({
+      currentVersion: "0.6.1",
+      fetchImpl: (url, options) => fakeFetch(files).fetchImpl(url, options),
+      tempDirectory: directory,
+      install: { directory: "C:\\Apps", execPath: "C:\\Apps\\a.exe", pid: 7 },
+      quit: () => {
+        quit += 1;
+      },
+      spawnSyncImpl: () => ({ status: 1 })
+    });
+    assert.equal(await manager.install(), false);
+    assert.equal(quit, 0);
+    assert.equal(manager.state.status, "error");
+    assert.match(manager.state.message, /설치 프로그램을 시작하지 못했어요/u);
+  }));
