@@ -104,7 +104,7 @@ class EnhanceSelectionActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val secureStore = SecureStore(this)
-        aiClient = AiClient(secureStore)
+        aiClient = AiClient(secureStore, com.example.writingenhancer.preferences.AppPreferences(this))
         memoryStore = MemoryStore(secureStore)
         workspaceStore = WorkspaceStore(secureStore, File(filesDir, BridgeActivity.ATTACHMENT_DIRECTORY))
         canReplace = SelectionTextPolicy.canReplace(
@@ -182,7 +182,7 @@ class EnhanceSelectionActivity : Activity() {
                 onFailure = { failure ->
                     if (failure is MissingApiKeyException) {
                         progress.visibility = View.GONE
-                        setStatus("설정에서 OpenAI 또는 Gemini API 키를 먼저 넣어 주세요.")
+                        setStatus(failure.message.orEmpty())
                         setButtons(actions, listOf(button("설정 열기", primary = true) { openApp() }))
                         setButtons(secondary, listOf(button("닫기", primary = false) { finish() }))
                     } else {
@@ -749,7 +749,7 @@ class EnhanceSelectionActivity : Activity() {
     private fun showRequestFailure(failure: Throwable) {
         showOptions()
         if (failure is MissingApiKeyException) {
-            setStatus("설정에서 OpenAI 또는 Gemini API 키를 먼저 넣어 주세요.")
+            setStatus(failure.message.orEmpty())
             setButtons(actions, listOf(button("설정 열기", primary = true) { openApp() }))
         } else {
             setStatus(failure.message?.take(160) ?: "잠시 연결하지 못했어요.")

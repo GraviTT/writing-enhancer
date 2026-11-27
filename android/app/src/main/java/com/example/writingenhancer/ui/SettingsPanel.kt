@@ -20,6 +20,7 @@ import android.widget.Space
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.example.writingenhancer.ai.AiProvider
 import com.example.writingenhancer.memory.MemoryItem
 import com.example.writingenhancer.memory.MemoryStore
 import com.example.writingenhancer.preferences.AppPreferences
@@ -252,7 +253,83 @@ object SettingsPanel {
                 onDelta = { deltaX, deltaY -> onMoveBy(deltaX, deltaY) },
             ),
         )
-        val connectionReady = secureStore.contains(SecureStore.OPENAI_KEY) || secureStore.contains(SecureStore.GEMINI_KEY)
+        var selected = preferences.aiSelection(secureStore)
+        val fullWidth = ViewGroup.LayoutParams.MATCH_PARENT
+        container.addView(Ui.label(context, "사용할 AI", 13f, muted, true).apply {
+            setPadding(0, context.dp(4), 0, context.dp(6))
+        })
+        val providerRow = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
+        container.addView(providerRow)
+        val providerButtons = AiProvider.values().associateWith { provider ->
+            textAction(context, provider.label, foreground, fieldColor).also { button ->
+                providerRow.addView(button, LinearLayout.LayoutParams(0, context.dp(48), 1f).apply {
+                    if (provider == AiProvider.GEMINI) marginStart = context.dp(6)
+                })
+            }
+        }
+        val modelButton = textAction(context, "", foreground, fieldColor)
+        container.addView(modelButton, LinearLayout.LayoutParams(fullWidth, context.dp(48)).apply {
+            topMargin = context.dp(6)
+        })
+        val modelOptions = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        container.addView(modelOptions)
+        val modelHint = Ui.label(context, "", 12f, muted).apply {
+            setPadding(0, context.dp(6), 0, context.dp(12))
+        }
+        container.addView(modelHint)
+        fun renderSelection() {
+            selected = preferences.aiSelection(secureStore)
+            providerButtons.forEach { (provider, button) ->
+                val active = provider == selected?.provider
+                button.isSelected = active
+                button.text = if (active) "✓  ${provider.label}" else provider.label
+                button.setTextColor(if (active) Color.WHITE else foreground)
+                button.background = Ui.interactive(context, if (active) Ui.ACCENT else fieldColor, 12)
+            }
+            val provider = selected?.provider
+            val options = provider?.models.orEmpty()
+            val label = options.find { it.first == selected?.model }?.second ?: "다시 선택해 주세요"
+            val opened = modelOptions.visibility == View.VISIBLE
+            modelButton.text = "모델 · $label  ${if (opened) "▴" else "▾"}"
+            modelButton.isEnabled = provider != null
+            modelHint.text = when {
+                provider == null -> "위에서 사용할 AI를 다시 선택해 주세요."
+                secureStore.contains(provider.keyName) -> "선택한 AI와 모델만 사용해요."
+                else -> "${provider.label} 키를 아래 ‘AI 연결’에 등록해 주세요."
+            }
+            modelOptions.removeAllViews()
+            if (opened && provider != null) options.forEach { (id, name) ->
+                val active = id == selected?.model
+                val option = textAction(context, if (active) "✓  $name" else name, foreground, fieldColor)
+                option.isSelected = active
+                option.setOnClickListener {
+                    preferences.selectModel(provider, id)
+                    modelOptions.visibility = View.GONE
+                    renderSelection()
+                    onChanged()
+                }
+                modelOptions.addView(option, LinearLayout.LayoutParams(fullWidth, context.dp(48)).apply {
+                    topMargin = context.dp(3)
+                })
+            }
+        }
+        providerButtons.forEach { (provider, button) ->
+            button.setOnClickListener {
+                if (selected?.provider != provider) preferences.selectProvider(provider)
+                modelOptions.visibility = View.GONE
+                renderSelection()
+                onChanged()
+            }
+        }
+        modelButton.setOnClickListener {
+            modelOptions.visibility = if (modelOptions.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            renderSelection()
+        }
+        renderSelection()
+        val connectionReady = selected?.provider?.let { secureStore.contains(it.keyName) } == true
         val connectionToggle = textAction(context,
             if (connectionReady) "AI 연결 · 설정 보기  ▾" else "AI 연결 · 키 등록  ▴",
             foreground, fieldColor)
@@ -282,7 +359,7 @@ object SettingsPanel {
         )
         val geminiInput = keyInput(
             context,
-            "Gemini API 키 · 선택",
+            "Gemini API 키",
             secureStore.contains(SecureStore.GEMINI_KEY),
             dark,
             foreground,
@@ -538,12 +615,10 @@ object SettingsPanel {
             if (gemini.isNotEmpty()) secureStore.putString(SecureStore.GEMINI_KEY, gemini)
             openAiInput.second.text?.clear()
             geminiInput.second.text?.clear()
-            openAiInput.second.hint = "저장됨 · 바꾸려면 새 키 입력"
-            geminiInput.second.hint = if (secureStore.contains(SecureStore.GEMINI_KEY)) {
-                "저장됨 · 바꾸려면 새 키 입력"
-            } else {
-                "선택 사항"
-            }
+            fun keyHint(key: String) = if (secureStore.contains(key)) "저장됨 · 바꾸려면 새 키 입력" else "키 붙여넣기"
+            openAiInput.second.hint = keyHint(SecureStore.OPENAI_KEY)
+            geminiInput.second.hint = keyHint(SecureStore.GEMINI_KEY)
+            renderSelection()
             Toast.makeText(context, "기기에 안전하게 저장했어요.", Toast.LENGTH_SHORT).show()
             onChanged()
         }
@@ -556,8 +631,9 @@ object SettingsPanel {
         clearKeys.setOnClickListener {
             secureStore.remove(SecureStore.OPENAI_KEY)
             secureStore.remove(SecureStore.GEMINI_KEY)
-            openAiInput.second.hint = "필수 또는 Gemini만 입력"
-            geminiInput.second.hint = "선택 사항"
+            openAiInput.second.hint = "키 붙여넣기"
+            geminiInput.second.hint = "키 붙여넣기"
+            renderSelection()
             Toast.makeText(context, "저장된 API 키를 지웠어요.", Toast.LENGTH_SHORT).show()
             onChanged()
         }

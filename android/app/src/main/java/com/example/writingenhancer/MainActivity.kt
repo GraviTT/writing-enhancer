@@ -255,12 +255,13 @@ class MainActivity : Activity() {
     private fun updateState() {
         if (!::status.isInitialized) return
         val running = OverlayService.isMarkedRunning(this)
-        val keyReady = secureStore.contains(SecureStore.OPENAI_KEY) ||
-            secureStore.contains(SecureStore.GEMINI_KEY)
+        val provider = com.example.writingenhancer.preferences.AppPreferences(this).aiSelection(secureStore)?.provider
+        val keyReady = provider != null && secureStore.contains(provider.keyName)
         status.text = when {
             running -> "버블이 화면 위에서 대기 중이에요."
             !Settings.canDrawOverlays(this) -> "화면 위 표시 권한이 필요해요."
-            !keyReady -> "준비됨 · ⚙에서 API 키를 넣어 주세요."
+            provider == null -> "준비됨 · ⚙에서 사용할 AI를 선택해 주세요."
+            !keyReady -> "준비됨 · ⚙에서 ${provider.label} API 키를 넣어 주세요."
             else -> "준비됨"
         }
         mainButton.text = if (running) "버블 끄기" else "버블 시작"

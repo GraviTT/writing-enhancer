@@ -728,6 +728,36 @@ function loadDesktop() {
   return require(path.join(repository, "desktop", "src", "lib", "ai-client.js"));
 }
 
+// 첫 항목은 0.8.0에서 사용하던 모델이다. 목록 추가가 기존 선택을 바꾸지 않게 한다.
+function emitModelCatalog(emit) {
+  const catalog = readJson(path.join(repository, "shared/rules/model-catalog.json"));
+  const rows = Object.entries(catalog);
+  if (rows.length !== 2 || !catalog.openai || !catalog.gemini) throw new Error("모델 공급자 목록을 확인하세요.");
+  const seen = new Set();
+  for (const [provider, models] of rows) {
+    if (!Array.isArray(models) || !models.length) throw new Error("빈 모델 목록: " + provider);
+    for (const { id, label } of models) {
+      if (typeof id !== "string" || !/^[a-z0-9.-]+$/u.test(id) || typeof label !== "string" || !label.trim() || seen.has(id)) {
+        throw new Error("모델 이름 또는 중복 ID를 확인하세요: " + id);
+      }
+      seen.add(id);
+    }
+  }
+  emit(path.join(repository, "desktop/src/lib/model-catalog.json"), JSON.stringify(catalog, null, 2) + "\n");
+  const lines = [
+    ...HEADER_LINES.map(line => "// " + line),
+    "package com.example.writingenhancer.ai", "",
+    "object ModelCatalog {", "    val models: Map<String, List<Pair<String, String>>> = mapOf("
+  ];
+  for (const [provider, models] of rows) {
+    lines.push("        " + kt(provider) + " to listOf(");
+    for (const model of models) lines.push("            " + kt(model.id) + " to " + kt(model.label) + ",");
+    lines.push("        ),");
+  }
+  lines.push("    )", "}", "");
+  emit(path.join(repository, "android/app/src/main/java/com/example/writingenhancer/ai/ModelCatalog.kt"), lines.join("\n"));
+}
+
 function relative(file) {
   return path.relative(repository, file).replaceAll("\\", "/");
 }
@@ -753,6 +783,7 @@ function main() {
     console.log(`생성: ${relative(file)}`);
   };
 
+  emitModelCatalog(emit);
   emit(outputs.desktopRules, renderDesktopRules(desktopData(rules, actionNames)));
   emit(outputs.desktopWritingRules, renderDesktopWritingRules(writingData(writing)));
   emit(outputs.androidWritingRules, renderAndroidWritingRules(writingData(writing)));

@@ -32,11 +32,18 @@ const sevenZip = path.join(
   "7za.exe"
 );
 
+// 느린 디스크에서 압축 해제와 첫 실행을 별도로 진단할 때만 상한을 늘린다.
+// 기본 검수와 CI는 종전의 30초 기준을 그대로 사용한다.
+const requestedTimeout = Number(process.env.WRITING_ENHANCER_SMOKE_TIMEOUT_MS);
+const timeoutMs = Number.isSafeInteger(requestedTimeout) && requestedTimeout >= 30000 && requestedTimeout <= 180000
+  ? requestedTimeout : 30000;
+
 function run(executable, args, cwd) {
+  const started = Date.now();
   const result = spawnSync(executable, args, {
     cwd,
     encoding: "utf8",
-    timeout: 30_000,
+    timeout: timeoutMs,
     windowsHide: true
   });
   // 스모크 실행은 임시 폴더에 userData(writing-enhancer-smoke-v2-<pid>)를 만든다. 끝나면 지운다.
@@ -44,6 +51,8 @@ function run(executable, args, cwd) {
     removeSmokeUserData(path.join(os.tmpdir(), `writing-enhancer-smoke-v2-${result.pid}`));
   }
   return {
+    elapsedMs: Date.now() - started,
+    timeoutMs,
     exitCode: result.status,
     timedOut: Boolean(result.error?.code === "ETIMEDOUT"),
     errorCode: result.error?.code || null,

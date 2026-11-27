@@ -4,6 +4,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Base64
 import com.example.writingenhancer.memory.MemoryCandidate
+import com.example.writingenhancer.preferences.AppPreferences
 import com.example.writingenhancer.security.SecureStore
 import org.json.JSONArray
 import org.json.JSONObject
@@ -73,18 +74,12 @@ class SideChatCall internal constructor(
         deltaListener(ChatAnswer.visibleStreamText(accumulated))
     }
 
-    /** 다른 AI로 다시 물을 때 앞서 흘려 보낸 글을 지운다. */
-    internal fun resetDelta() {
-        lastDeltaAt = 0L
-        if (!isCancelled) deltaListener("")
-    }
-
     private companion object {
         const val DELTA_INTERVAL_MS = 40L
     }
 }
 
-class AiClient(private val secureStore: SecureStore) {
+class AiClient(private val secureStore: SecureStore, private val preferences: AppPreferences) {
     private val enhancementExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     // A cancelled HttpURLConnection may take a short time to observe interruption. Keep
     // one replacement lane so closing and reopening side chat never queues a new answer
@@ -92,13 +87,18 @@ class AiClient(private val secureStore: SecureStore) {
     private val chatExecutor: ExecutorService = Executors.newFixedThreadPool(2)
     private val mainHandler = Handler(Looper.getMainLooper())
 
+    private fun <T> submit(callback: (Result<T>) -> Unit, run: (AiSelection) -> T): Future<*> {
+        val selection = preferences.aiSelection(secureStore)
+        return enhancementExecutor.submit {
+            val result = runCatching { run(requireSelection(selection)) }
+            mainHandler.post { callback(result) }
+        }
+    }
+
     fun enhance(
         request: EnhancementRequest,
         callback: (Result<EnhancementResult>) -> Unit,
-    ): Future<*> = enhancementExecutor.submit {
-        val result = runCatching { runRequest(request) }
-        mainHandler.post { callback(result) }
-    }
+    ): Future<*> = submit(callback) { runRequest(request, it) }
 
     fun chat(
         request: SideChatRequest,
@@ -106,12 +106,13 @@ class AiClient(private val secureStore: SecureStore) {
         onDelta: (String) -> Unit = {},
         callback: (Result<SideChatResult>) -> Unit,
     ): SideChatCall {
+        val selection = preferences.aiSelection(secureStore)
         val call = SideChatCall(
             progressListener = { progress -> mainHandler.post { onProgress(progress) } },
             deltaListener = { text -> mainHandler.post { onDelta(text) } },
         )
         call.future = chatExecutor.submit {
-            val result = runCatching { runChatRequest(request, call) }.recoverCatching { failure ->
+            val result = runCatching { runChatRequest(request, call, requireSelection(selection)) }.recoverCatching { failure ->
                 throw if (call.isCancelled) SideChatCancelledException() else failure
             }
             mainHandler.post { callback(result) }
@@ -119,133 +120,66 @@ class AiClient(private val secureStore: SecureStore) {
         return call
     }
 
-    /** 화면에서 잘라 낸 PNG 한 장의 글자를 읽는다. 화면 이미지는 다른 AI에 다시 보내지 않는다. */
     fun readImageText(
         image: File,
         callback: (Result<ImageTextResult>) -> Unit,
-    ): Future<*> = enhancementExecutor.submit {
-        val result = runCatching { runImageText(image) }
-        mainHandler.post { callback(result) }
-    }
+    ): Future<*> = submit(callback) { runImageText(image, it) }
 
-    /** 글을 지정한 언어(ko·en·ja·zh)로 번역한다. 실패하면 다른 AI로 한 번 넘어간다. */
     fun translate(
         input: String,
         targetCode: String,
         situation: String,
         callback: (Result<TranslationResult>) -> Unit,
-    ): Future<*> = enhancementExecutor.submit {
-        val result = runCatching { runTranslation(input, targetCode, situation) }
-        mainHandler.post { callback(result) }
-    }
+    ): Future<*> = submit(callback) { runTranslation(input, targetCode, situation, it) }
 
     fun close() {
         enhancementExecutor.shutdownNow()
         chatExecutor.shutdownNow()
     }
 
-    private fun runImageText(image: File): ImageTextResult {
-        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
-        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
-        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) throw MissingApiKeyException()
+    private fun requireSelection(selection: AiSelection?): AiSelection =
+        requireNotNull(selection) { "설정에서 사용할 AI와 모델을 다시 선택해 주세요." }
+
+    private fun runImageText(image: File, selection: AiSelection): ImageTextResult {
         require(image.isFile && image.length() > 0) { "읽을 화면 이미지가 없어요." }
         requireValidBinary(
             image,
             AttachmentRef(image.absolutePath, "화면에서 읽을 부분.png", "image/png", image.length(), "screenshot"),
         )
-        return try {
-            if (!openAiKey.isNullOrBlank()) {
-                val content = JSONArray()
-                    .put(JSONObject().put("type", "input_text").put("text", SharedWritingRules.IMAGE_TEXT_USER))
-                    .put(
-                        JSONObject()
-                            .put("type", "input_image")
-                            .put("image_url", dataUrl(image, "image/png"))
-                            // 작은 글자를 읽어야 하므로 원래 해상도로 보낸다.
-                            .put("detail", "high"),
-                    )
-                ScreenTextPolicy.parseImageText(
-                    callOpenAiStructured(
-                        openAiKey,
-                        SharedWritingRules.IMAGE_TEXT_SYSTEM,
-                        content,
-                        "writing_enhancer_image_text",
-                        ScreenTextPolicy.imageTextSchema(),
-                    ),
-                    "GPT",
-                )
-            } else {
-                val parts = JSONArray()
-                    .put(JSONObject().put("text", SharedWritingRules.IMAGE_TEXT_USER))
-                    .put(
-                        JSONObject().put(
-                            "inline_data",
-                            JSONObject()
-                                .put("mime_type", "image/png")
-                                .put("data", Base64.encodeToString(image.readBytes(), Base64.NO_WRAP)),
-                        ),
-                    )
-                ScreenTextPolicy.parseImageText(
-                    callGeminiStructured(
-                        requireNotNull(geminiKey),
-                        SharedWritingRules.IMAGE_TEXT_SYSTEM,
-                        parts,
-                        ScreenTextPolicy.imageTextSchema(),
-                    ),
-                    "Gemini",
-                )
-            }
-        } catch (failure: Throwable) {
-            throw IOException("화면의 글을 읽지 못했어요. 이미지는 저장하지 않았으니 다시 캡처해 주세요.", failure)
-        }
+        val json = selection.call(secureStore::getString, { key, model ->
+            val content = JSONArray()
+                .put(JSONObject().put("type", "input_text").put("text", SharedWritingRules.IMAGE_TEXT_USER))
+                .put(JSONObject().put("type", "input_image").put("image_url", dataUrl(image, "image/png")).put("detail", "high"))
+            callOpenAiStructured(key, model, SharedWritingRules.IMAGE_TEXT_SYSTEM, content,
+                "writing_enhancer_image_text", ScreenTextPolicy.imageTextSchema())
+        }, { key, model ->
+            val parts = JSONArray().put(JSONObject().put("text", SharedWritingRules.IMAGE_TEXT_USER))
+                .put(JSONObject().put("inline_data", JSONObject().put("mime_type", "image/png")
+                    .put("data", Base64.encodeToString(image.readBytes(), Base64.NO_WRAP))))
+            callGeminiStructured(key, model, SharedWritingRules.IMAGE_TEXT_SYSTEM, parts, ScreenTextPolicy.imageTextSchema())
+        })
+        return ScreenTextPolicy.parseImageText(json, selection.provider.label)
     }
 
-    private fun runTranslation(input: String, targetCode: String, situation: String): TranslationResult {
+    private fun runTranslation(input: String, targetCode: String, situation: String, selection: AiSelection): TranslationResult {
         val text = input.trim()
         require(text.isNotEmpty()) { "번역할 글을 먼저 적어 주세요." }
-        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
-        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
-        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) throw MissingApiKeyException()
         val prompt = ScreenTextPolicy.translationPrompt(text, targetCode, situation)
-        var primaryFailure: Throwable? = null
-        if (!openAiKey.isNullOrBlank()) {
-            try {
-                return ScreenTextPolicy.parseTranslation(
-                    callOpenAiStructured(
-                        openAiKey,
-                        SharedWritingRules.TRANSLATION_SYSTEM,
-                        JSONArray().put(JSONObject().put("type", "input_text").put("text", prompt)),
-                        "writing_enhancer_translation",
-                        ScreenTextPolicy.translationSchema(),
-                    ),
-                    "GPT",
-                )
-            } catch (failure: Throwable) {
-                primaryFailure = failure
-            }
-        }
-        if (!geminiKey.isNullOrBlank()) {
-            try {
-                return ScreenTextPolicy.parseTranslation(
-                    callGeminiStructured(
-                        geminiKey,
-                        SharedWritingRules.TRANSLATION_SYSTEM,
-                        JSONArray().put(JSONObject().put("text", prompt)),
-                        ScreenTextPolicy.translationSchema(),
-                    ),
-                    "Gemini",
-                )
-            } catch (failure: Throwable) {
-                primaryFailure?.let { failure.addSuppressed(it) }
-                throw failure
-            }
-        }
-        throw primaryFailure ?: MissingApiKeyException()
+        val json = selection.call(secureStore::getString, { key, model ->
+            callOpenAiStructured(key, model, SharedWritingRules.TRANSLATION_SYSTEM,
+                JSONArray().put(JSONObject().put("type", "input_text").put("text", prompt)),
+                "writing_enhancer_translation", ScreenTextPolicy.translationSchema())
+        }, { key, model ->
+            callGeminiStructured(key, model, SharedWritingRules.TRANSLATION_SYSTEM,
+                JSONArray().put(JSONObject().put("text", prompt)), ScreenTextPolicy.translationSchema())
+        })
+        return ScreenTextPolicy.parseTranslation(json, selection.provider.label)
     }
 
     // JSON 스키마로 답을 받는 짧은 요청(화면 글 읽기·번역). 답의 JSON 글을 돌려준다.
     private fun callOpenAiStructured(
         apiKey: String,
+        model: String,
         instructions: String,
         content: JSONArray,
         schemaName: String,
@@ -254,7 +188,7 @@ class AiClient(private val secureStore: SecureStore) {
         val body = JSONObject().apply {
             OpenAiPrivacyPolicy.REQUIRED_BODY_FIELDS.forEach { (name, value) -> put(name, value) }
         }
-            .put("model", OPENAI_MODEL)
+            .put("model", model)
             .put("instructions", instructions)
             .put("input", JSONArray().put(JSONObject().put("role", "user").put("content", content)))
             .put("reasoning", JSONObject().put("effort", "low"))
@@ -291,6 +225,7 @@ class AiClient(private val secureStore: SecureStore) {
 
     private fun callGeminiStructured(
         apiKey: String,
+        model: String,
         instructions: String,
         parts: JSONArray,
         schema: JSONObject,
@@ -309,100 +244,33 @@ class AiClient(private val secureStore: SecureStore) {
             )
         validateGeminiRequestBody(body, searchEnabled = false)
         val response = postJson(
-            url = "https://generativelanguage.googleapis.com/v1beta/models/$GEMINI_MODEL:generateContent",
+            url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent",
             body = body,
             headers = mapOf("x-goog-api-key" to apiKey),
             provider = "Gemini",
             maxRequestBytes = RequestSizePolicy.GEMINI_MAX_BYTES,
         )
-        return JSONObject(response)
-            .getJSONArray("candidates")
-            .getJSONObject(0)
-            .getJSONObject("content")
-            .getJSONArray("parts")
-            .getJSONObject(0)
-            .getString("text")
+        return geminiAnswerText(JSONObject(response))
     }
 
-    private fun runRequest(request: EnhancementRequest): EnhancementResult {
-        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
-        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
-        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) {
-            throw MissingApiKeyException()
-        }
+    private fun runRequest(request: EnhancementRequest, selection: AiSelection): EnhancementResult =
+        selection.call(secureStore::getString,
+            { key, model -> callOpenAi(key, model, request) },
+            { key, model -> callGemini(key, model, request) })
 
-        var primaryFailure: Throwable? = null
-        if (!openAiKey.isNullOrBlank()) {
-            try {
-                return callOpenAi(openAiKey, request)
-            } catch (failure: Throwable) {
-                primaryFailure = failure
-            }
-        }
-
-        if (!geminiKey.isNullOrBlank()) {
-            try {
-                return callGemini(geminiKey, request)
-            } catch (failure: Throwable) {
-                primaryFailure?.let { failure.addSuppressed(it) }
-                throw failure
-            }
-        }
-
-        throw primaryFailure ?: MissingApiKeyException()
-    }
-
-    private fun runChatRequest(request: SideChatRequest, call: SideChatCall): SideChatResult {
+    private fun runChatRequest(request: SideChatRequest, call: SideChatCall, selection: AiSelection): SideChatResult {
         val prepared = SideChatSearchPolicy.prepareConversation(request.messages)
         val effectiveRequest = request.copy(
             messages = prepared.messages,
             priorExternalContext = request.priorExternalContext || prepared.priorExternalContext,
         )
-        val openAiKey = secureStore.getString(SecureStore.OPENAI_KEY)
-        val geminiKey = secureStore.getString(SecureStore.GEMINI_KEY)
-        if (openAiKey.isNullOrBlank() && geminiKey.isNullOrBlank()) {
-            throw MissingApiKeyException()
-        }
-        val searchRequired = SideChatSearchPolicy.mustSearch(
-            effectiveRequest.input,
-            effectiveRequest.forceSearch,
-        )
-        val fallbackAllowed =
-            SideChatSearchPolicy.allowProviderFallback(effectiveRequest.screenContext)
-        val attempts = buildList<Pair<String, () -> SideChatResult>> {
-            if (!openAiKey.isNullOrBlank()) add("GPT" to { callOpenAiChat(openAiKey, effectiveRequest, call) })
-            if (!geminiKey.isNullOrBlank()) add("Gemini" to { callGeminiChat(geminiKey, effectiveRequest, call) })
-        }
-
-        var failure: Throwable? = null
-        for ((provider, run) in attempts) {
-            call.ensureActive()
-            if (failure != null) call.resetDelta()
-            call.report(
-                SideChatProgress(
-                    if (failure != null) SideChatProgress.Stage.FALLBACK else SideChatProgress.Stage.REQUESTING,
-                    provider,
-                    searchRequired,
-                ),
-            )
-            try {
-                val result = run()
-                // 이미 화면에 흘려 보낸 답변이므로 출처가 없어도 다른 AI로 다시 묻지 않고 표시만 남긴다.
-                val flagged = if (missingRequiredSources(effectiveRequest, result)) {
-                    result.copy(sourcesMissing = true)
-                } else {
-                    result
-                }
-                return flagged.copy(fallbackUsed = failure != null)
-            } catch (error: Throwable) {
-                if (call.isCancelled) throw SideChatCancelledException()
-                failure?.let { error.addSuppressed(it) }
-                failure = error
-                // 화면 이미지는 다른 공급자에게 다시 보내지 않는다.
-                if (!fallbackAllowed) throw error
-            }
-        }
-        throw failure ?: MissingApiKeyException()
+        call.ensureActive()
+        call.report(SideChatProgress(SideChatProgress.Stage.REQUESTING, selection.provider.label,
+            SideChatSearchPolicy.mustSearch(effectiveRequest.input, effectiveRequest.forceSearch)))
+        val result = selection.call(secureStore::getString,
+            { key, model -> callOpenAiChat(key, model, effectiveRequest, call) },
+            { key, model -> callGeminiChat(key, model, effectiveRequest, call) })
+        return if (missingRequiredSources(effectiveRequest, result)) result.copy(sourcesMissing = true) else result
     }
 
     private fun missingRequiredSources(
@@ -414,13 +282,13 @@ class AiClient(private val secureStore: SecureStore) {
         request.forceSearch,
     )
 
-    private fun callOpenAi(apiKey: String, request: EnhancementRequest): EnhancementResult {
+    private fun callOpenAi(apiKey: String, model: String, request: EnhancementRequest): EnhancementResult {
         val body = JSONObject().apply {
             OpenAiPrivacyPolicy.REQUIRED_BODY_FIELDS.forEach { (name, value) ->
                 put(name, value)
             }
         }
-            .put("model", OPENAI_MODEL)
+            .put("model", model)
             .put("instructions", SYSTEM_INSTRUCTIONS)
             .put(
                 "input",
@@ -470,7 +338,7 @@ class AiClient(private val secureStore: SecureStore) {
         throw IOException("GPT 응답에 완성된 텍스트가 없습니다.")
     }
 
-    private fun callGemini(apiKey: String, request: EnhancementRequest): EnhancementResult {
+    private fun callGemini(apiKey: String, model: String, request: EnhancementRequest): EnhancementResult {
         val body = JSONObject()
             .put(
                 "system_instruction",
@@ -497,33 +365,28 @@ class AiClient(private val secureStore: SecureStore) {
 
         val response = postJson(
             url = "https://generativelanguage.googleapis.com/v1beta/models/" +
-                "$GEMINI_MODEL:generateContent",
+                "$model:generateContent",
             body = body,
             headers = mapOf("x-goog-api-key" to apiKey),
             provider = "Gemini",
             maxRequestBytes = RequestSizePolicy.GEMINI_MAX_BYTES,
         )
         val root = JSONObject(response)
-        val text = root
-            .getJSONArray("candidates")
-            .getJSONObject(0)
-            .getJSONObject("content")
-            .getJSONArray("parts")
-            .getJSONObject(0)
-            .getString("text")
+        val text = geminiAnswerText(root)
         return parseResult(text, "Gemini", requireCompleted = !request.questionFirst)
     }
 
     // 사이드 채팅: 일반 글 답변을 스트리밍으로 받고, 끝난 뒤 인용 위치와 검색 기록을 정리한다.
     private fun callOpenAiChat(
         apiKey: String,
+        model: String,
         request: SideChatRequest,
         call: SideChatCall,
     ): SideChatResult {
         val searchMode = SideChatSearchPolicy.mode(request.input, request.forceSearch)
         val body = JSONObject()
             .put("store", false)
-            .put("model", OPENAI_MODEL)
+            .put("model", model)
             .put("stream", true)
             .put("instructions", SharedSideChatRules.SYSTEM_PROMPT)
             .put(
@@ -574,6 +437,7 @@ class AiClient(private val secureStore: SecureStore) {
 
     private fun callGeminiChat(
         apiKey: String,
+        model: String,
         request: SideChatRequest,
         call: SideChatCall,
     ): SideChatResult {
@@ -608,7 +472,7 @@ class AiClient(private val secureStore: SecureStore) {
         )
         postEventStream(
             url = "https://generativelanguage.googleapis.com/v1beta/models/" +
-                "$GEMINI_MODEL:streamGenerateContent?alt=sse",
+                "$model:streamGenerateContent?alt=sse",
             body = body,
             headers = mapOf("x-goog-api-key" to apiKey),
             provider = "Gemini",
@@ -865,21 +729,24 @@ class AiClient(private val secureStore: SecureStore) {
         return try {
             connection.outputStream.use { it.write(payload) }
             val status = connection.responseCode
-            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-            val response = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-            if (status !in 200..299) {
-                val message = runCatching {
-                    JSONObject(response).optJSONObject("error")?.optString("message")
-                }.getOrNull().orEmpty()
-                throw IOException(
-                    if (message.isBlank()) "AI 서버 오류 ($status)" else "AI 서버 오류: $message",
-                )
-            }
-            response
+            if (status !in 200..299) throw httpFailure(provider, status)
+            connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         } finally {
             call?.detach(connection)
             connection.disconnect()
         }
+    }
+
+    // Never echo a provider error body: authentication failures can include part of a credential.
+    private fun httpFailure(provider: String, status: Int): IOException {
+        val help = when (status) {
+            401 -> "설정에서 선택한 AI의 API 키를 확인해 주세요."
+            403, 404 -> "설정에서 선택한 모델 이름과 계정의 이용 권한을 확인해 주세요."
+            429 -> "요청 한도 또는 이용 잔액을 확인한 뒤 다시 시도해 주세요."
+            in 500..599 -> "서버에 일시적인 문제가 있어요. 잠시 뒤 같은 모델로 다시 시도해 주세요."
+            else -> "선택한 모델이 이 요청을 처리하지 못했어요."
+        }
+        return IOException("$provider 오류 ($status) · $help")
     }
 
     // text/event-stream 응답을 줄 단위로 읽어 data 이벤트마다 JSON을 넘긴다.
@@ -913,18 +780,7 @@ class AiClient(private val secureStore: SecureStore) {
         try {
             connection.outputStream.use { it.write(payload) }
             val status = connection.responseCode
-            if (status !in 200..299) {
-                val response = connection.errorStream
-                    ?.bufferedReader(Charsets.UTF_8)
-                    ?.use { it.readText() }
-                    .orEmpty()
-                val message = runCatching {
-                    JSONObject(response).optJSONObject("error")?.optString("message")
-                }.getOrNull().orEmpty()
-                throw IOException(
-                    if (message.isBlank()) "AI 서버 오류 ($status)" else "AI 서버 오류: $message",
-                )
-            }
+            if (status !in 200..299) throw httpFailure(provider, status)
             val parser = ServerSentEventParser { data ->
                 runCatching { JSONObject(data) }.getOrNull()?.let(onEvent)
             }
@@ -1061,8 +917,6 @@ class AiClient(private val secureStore: SecureStore) {
     }
 
     companion object {
-        const val OPENAI_MODEL = "gpt-5.6-terra"
-        const val GEMINI_MODEL = "gemini-3.6-flash"
 
         private const val CONNECT_TIMEOUT_MS = 15_000
         private const val READ_TIMEOUT_MS = 60_000

@@ -124,8 +124,6 @@ object SideChatSearchPolicy {
         forceSearch: Boolean = false,
     ): Boolean = !mustSearch(input, forceSearch) || sources.isNotEmpty()
 
-    fun allowProviderFallback(screenContext: AttachmentRef?): Boolean = screenContext == null
-
     fun isExternallyGrounded(
         screenContext: AttachmentRef?,
         sources: List<WebSource>,
@@ -321,8 +319,8 @@ data class SideChatProgress(
     }
 }
 
-class MissingApiKeyException : IllegalStateException(
-    "설정에서 OpenAI 또는 Gemini API 키를 먼저 저장해 주세요.",
+class MissingApiKeyException(provider: String) : IllegalStateException(
+    "설정에서 선택한 ${provider}의 API 키를 먼저 저장해 주세요.",
 )
 
 object AiPromptBuilder {

@@ -3,8 +3,16 @@
 const fs = require("node:fs");
 const path = require("node:path");
 const situationPresets = require("../renderer/situation-presets");
+const modelCatalog = require("./model-catalog.json");
+
+const defaultModels = Object.freeze({
+  openai: modelCatalog.openai[0].id,
+  gemini: modelCatalog.gemini[0].id
+});
 
 const DEFAULTS = Object.freeze({
+  aiProvider: "openai",
+  aiModels: defaultModels,
   shortcut: "CommandOrControl+Shift+Space",
   // 다른 프로그램에서 드래그해 둔 글을 바로 강화하는 단축키
   selectionShortcut: "CommandOrControl+Shift+G",
@@ -37,8 +45,19 @@ function normalizePlacement(value) {
   };
 }
 
+function initialProvider(secrets) {
+  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY || secrets?.openai);
+  const hasGemini = Boolean(process.env.GEMINI_API_KEY || secrets?.gemini);
+  return hasGemini && !hasOpenAI ? "gemini" : "openai";
+}
+
 function normalizePublic(value = {}) {
   return {
+    aiProvider: value.aiProvider ?? DEFAULTS.aiProvider,
+    aiModels: {
+      openai: value.aiModels?.openai ?? defaultModels.openai,
+      gemini: value.aiModels?.gemini ?? defaultModels.gemini
+    },
     shortcut: String(value.shortcut || DEFAULTS.shortcut).slice(0, 120),
     selectionShortcut: String(value.selectionShortcut || DEFAULTS.selectionShortcut).slice(0, 120),
     copyOfferEnabled: value.copyOfferEnabled !== false,
@@ -61,12 +80,19 @@ class ConfigStore {
   constructor(filePath, safeStorage) {
     this.filePath = filePath;
     this.safeStorage = safeStorage;
+    this.needsProviderMigration = false;
     this.data = this.#read();
+    if (this.needsProviderMigration) this.#write();
   }
 
   #read() {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      if (parsed.aiProvider == null) {
+        // 기존 단일 키 설치가 업데이트 후에도 같은 공급자를 사용하도록 한 번만 이관한다.
+        parsed.aiProvider = initialProvider(parsed.secrets);
+        this.needsProviderMigration = true;
+      }
       return {
         ...normalizePublic(parsed),
         placements: {
@@ -79,9 +105,12 @@ class ConfigStore {
           : null,
         secrets: parsed.secrets && typeof parsed.secrets === "object" ? parsed.secrets : {}
       };
-    } catch {
+    } catch (error) {
+      const isFirstRun = error.code === "ENOENT";
+      this.needsProviderMigration = isFirstRun;
       return {
         ...DEFAULTS,
+        aiProvider: isFirstRun ? initialProvider() : DEFAULTS.aiProvider,
         placements: {
           expanded: normalizePlacement(),
           collapsed: normalizePlacement()
@@ -99,6 +128,7 @@ class ConfigStore {
   getPublicSettings() {
     return {
       ...normalizePublic(this.data),
+      modelCatalog,
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY || this.data.secrets.openai),
       hasGeminiKey: Boolean(process.env.GEMINI_API_KEY || this.data.secrets.gemini),
       openAIFromEnvironment: Boolean(process.env.OPENAI_API_KEY),
@@ -125,6 +155,11 @@ class ConfigStore {
 
   getShortcut() {
     return this.data.shortcut || DEFAULTS.shortcut;
+  }
+
+  getAISelection() {
+    const provider = this.data.aiProvider;
+    return { provider, model: this.data.aiModels?.[provider] };
   }
 
   getSelectionShortcut() {
@@ -166,6 +201,8 @@ class ConfigStore {
   }
 
   save({
+    aiProvider,
+    aiModel,
     shortcut,
     selectionShortcut,
     copyOfferEnabled,
@@ -183,6 +220,19 @@ class ConfigStore {
     clearOpenAI,
     clearGemini
   }) {
+    if (aiProvider !== undefined || aiModel !== undefined) {
+      if (!Object.hasOwn(modelCatalog, aiProvider) || !modelCatalog[aiProvider].some(({ id }) => id === aiModel)) {
+        throw new Error("설정에서 사용할 AI와 모델을 다시 선택해 주세요.");
+      }
+    }
+    const hasSecretChange =
+      Boolean(String(openaiKey ?? "").trim()) ||
+      Boolean(String(geminiKey ?? "").trim()) ||
+      clearOpenAI === true ||
+      clearGemini === true;
+    if (hasSecretChange && !this.safeStorage.isEncryptionAvailable()) {
+      throw new Error("Windows 보안 저장소를 사용할 수 없어 API 키를 저장하지 않았습니다.");
+    }
     if (shortcut) {
       this.data.shortcut = String(shortcut).trim();
     }
@@ -212,14 +262,9 @@ class ConfigStore {
     });
     Object.assign(this.data, nextPublic);
 
-    const hasSecretChange =
-      Boolean(String(openaiKey ?? "").trim()) ||
-      Boolean(String(geminiKey ?? "").trim()) ||
-      clearOpenAI === true ||
-      clearGemini === true;
-
-    if (hasSecretChange && !this.safeStorage.isEncryptionAvailable()) {
-      throw new Error("Windows 보안 저장소를 사용할 수 없어 API 키를 저장하지 않았습니다.");
+    if (aiProvider !== undefined) {
+      this.data.aiProvider = aiProvider;
+      this.data.aiModels = { ...this.data.aiModels, [aiProvider]: aiModel };
     }
 
     if (clearOpenAI === true && !process.env.OPENAI_API_KEY) {

@@ -1,6 +1,6 @@
 "use strict";
 
-// 사이드 채팅 AI 요청: 스트리밍 일반 글 답변, 제어 블록, 문장 출처, 검색 정책, 중단·폴백.
+// 사이드 채팅 AI 요청: 스트리밍 일반 글 답변, 제어 블록, 문장 출처, 검색 정책, 중단·고정 라우팅.
 // 모든 응답은 7바이트 조각으로 흘려 보내 한글이 조각 경계에서 잘리는 경우도 함께 확인한다.
 
 const test = require("node:test");
@@ -8,6 +8,8 @@ const assert = require("node:assert/strict");
 
 const {
   AIClient,
+  OPENAI_MODEL,
+  GEMINI_MODEL,
   extractGeminiSources,
   extractOpenAISources,
   geminiWebSearchUsed,
@@ -113,6 +115,7 @@ function geminiEvents({ answer, control = {}, grounding = null }) {
 function createClient({ openai, gemini }) {
   const requests = [];
   const client = new AIClient({
+    getSelection: () => openai ? { provider: "openai", model: OPENAI_MODEL } : { provider: "gemini", model: GEMINI_MODEL },
     getApiKey: (provider) =>
       (provider === "openai" && openai) || (provider === "gemini" && gemini) ? "test-key" : "",
     fetchImpl: async (url, options) => {
@@ -493,7 +496,7 @@ test("필수 검색에서 출처가 없으면 이미 보여 준 답변을 다른
   assert.equal(result.sourcesMissing, true);
 });
 
-test("필수 검색에서 모든 공급자가 오류를 내면 검색 실패로 알린다", async () => {
+test("필수 검색에서 선택한 공급자가 오류를 내면 검색 실패로 알린다", async () => {
   const { client } = createClient({ openai: () => failure(), gemini: () => failure() });
   await assert.rejects(
     client.chat({ input: "이 뉴스 사실 확인해 줘" }),
@@ -501,9 +504,9 @@ test("필수 검색에서 모든 공급자가 오류를 내면 검색 실패로 
   );
 });
 
-test("스트리밍 도중 오류가 나면 진행 단계를 알리고 다음 공급자로 넘어간다", async () => {
+test("스트리밍 도중 오류가 나도 다른 공급자로 넘어가지 않는다", async () => {
   const progress = [];
-  const { client } = createClient({
+  const { client, requests } = createClient({
     openai: () =>
       sse([
         { type: "response.web_search_call.searching" },
@@ -512,15 +515,12 @@ test("스트리밍 도중 오류가 나면 진행 단계를 알리고 다음 공
       ]),
     gemini: () => sse(geminiEvents({ answer: "대체 답변" }))
   });
-  const result = await client.chat({ input: "공식 자료를 찾아줘", onProgress: (event) => progress.push(event) });
+  await assert.rejects(client.chat({ input: "공식 자료를 찾아줘", onProgress: (event) => progress.push(event) }), { code: "SEARCH_UNAVAILABLE" });
   assert.deepEqual(progress, [
     { stage: "requesting", provider: "openai", searchPolicy: "required" },
-    { stage: "searching", provider: "openai", searchPolicy: "required" },
-    { stage: "fallback", provider: "gemini", searchPolicy: "required" }
+    { stage: "searching", provider: "openai", searchPolicy: "required" }
   ]);
-  assert.equal(result.provider, "gemini");
-  assert.equal(result.fallbackUsed, true);
-  assert.equal(result.reply, "대체 답변");
+  assert.equal(requests.length, 1);
 });
 
 test("화면 요청은 출처가 없거나 첫 공급자가 실패해도 화면을 두 번째 공급자에 보내지 않는다", async () => {

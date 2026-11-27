@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.writingenhancer"
         minSdk = 26
         targetSdk = 35
-        versionCode = 17
-        versionName = "0.8.0"
+        versionCode = 18
+        versionName = "0.9.0"
 
         testInstrumentationRunner = "com.example.writingenhancer.NativeUiQa"
     }
@@ -64,5 +64,5 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     // 단위 테스트의 android.jar org.json은 빈 껍데기라, 답변 제어 블록·스트리밍 응답 해석을
     // 검사하려면 실제 구현이 필요하다.
-    testImplementation("org.json:json:20180813")
+    testImplementation("org.json:json:20240303")
 }

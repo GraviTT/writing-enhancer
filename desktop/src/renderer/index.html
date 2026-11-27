@@ -434,6 +434,16 @@
 
           <form id="settingsForm">
             <div class="settings-section">
+              <h3 id="aiProviderTitle">사용할 AI</h3>
+              <div class="provider-picker" role="radiogroup" aria-labelledby="aiProviderTitle">
+                <label><input class="sr-only" type="radio" name="aiProvider" id="providerOpenAI" value="openai" required /><span>GPT</span></label>
+                <label><input class="sr-only" type="radio" name="aiProvider" id="providerGemini" value="gemini" /><span>Gemini</span></label>
+              </div>
+              <label class="field-label" for="aiModelSelect">모델</label>
+              <select id="aiModelSelect" class="settings-input" required></select>
+              <p class="privacy-note">저장하면 모든 AI 기능에서 이 모델만 사용해요.</p>
+            </div>
+            <div class="settings-section">
               <h3>화면 <small>바꾸는 즉시 저장</small></h3>
               <label class="field-label" for="windowMode">창 이동 방식</label>
               <select id="windowMode" class="settings-input">

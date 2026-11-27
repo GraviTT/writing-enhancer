@@ -378,8 +378,6 @@ class AiPromptBuilderTest {
         listOf("set_situation", "replace_result", "enhance", "copy_result", "new_writing").forEach { name ->
             assertTrue(name, SideChatSearchPolicy.requiresConfirmation(SideChatAction(name, ""), true))
         }
-        assertFalse(SideChatSearchPolicy.allowProviderFallback(screen))
-        assertTrue(SideChatSearchPolicy.allowProviderFallback(null))
     }
 
     @Test

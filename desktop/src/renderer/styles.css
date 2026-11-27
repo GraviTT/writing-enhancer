@@ -1952,3 +1952,36 @@ textarea {
   background: var(--purple);
   color: white;
 }
+.provider-picker {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 11px;
+  background: var(--purple-soft);
+}
+
+.provider-picker label {
+  position: relative;
+  flex: 1;
+  cursor: pointer;
+}
+
+.provider-picker span {
+  display: grid;
+  place-items: center;
+  min-height: 32px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.provider-picker input:checked + span {
+  color: white;
+  background: var(--purple-dark);
+}
+
+.provider-picker input:focus-visible + span {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}

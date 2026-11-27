@@ -1,0 +1,50 @@
+{
+  "openai": [
+    {
+      "id": "gpt-5.6-terra",
+      "label": "GPT-5.6 Terra"
+    },
+    {
+      "id": "gpt-6.2-sol",
+      "label": "GPT-6.2 Sol"
+    },
+    {
+      "id": "gpt-6.2-astra",
+      "label": "GPT-6.2 Astra"
+    },
+    {
+      "id": "gpt-6.1-terra",
+      "label": "GPT-6.1 Terra"
+    },
+    {
+      "id": "gpt-6-luna",
+      "label": "GPT-6 Luna"
+    }
+  ],
+  "gemini": [
+    {
+      "id": "gemini-3.6-flash",
+      "label": "Gemini 3.6 Flash"
+    },
+    {
+      "id": "gemini-4-hydrogen",
+      "label": "Gemini 4 Hydrogen"
+    },
+    {
+      "id": "gemini-4-neon",
+      "label": "Gemini 4 Neon"
+    },
+    {
+      "id": "gemini-4-carbon",
+      "label": "Gemini 4 Carbon"
+    },
+    {
+      "id": "gemini-4-argon",
+      "label": "Gemini 4 Argon"
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "label": "Gemini 3.8 Flash"
+    }
+  ]
+}

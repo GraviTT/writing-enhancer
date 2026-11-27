@@ -21,8 +21,9 @@ const {
   webSearchPolicy
 } = require("./side-chat-policy");
 
-const OPENAI_MODEL = "gpt-5.6-terra";
-const GEMINI_MODEL = "gemini-3.6-flash";
+const modelCatalog = require("./model-catalog.json");
+const OPENAI_MODEL = modelCatalog.openai[0].id;
+const GEMINI_MODEL = modelCatalog.gemini[0].id;
 const MAX_GEMINI_REQUEST_BYTES = 19_000_000;
 const MAX_WEB_SOURCES = sideChatRules.limits.webSources;
 // 사이드 채팅 답변은 스트리밍으로 받으므로 전체 대기 한도를 넉넉히 둔다.
@@ -760,7 +761,7 @@ function extractOpenAIText(payload) {
 
 function extractGeminiText(payload) {
   return (payload?.candidates?.[0]?.content?.parts ?? [])
-    .map((part) => part?.text ?? "")
+    .map((part) => (typeof part?.text === "string" && part.thought !== true ? part.text : ""))
     .join("");
 }
 
@@ -899,7 +900,8 @@ function prepareChatPayload(payload) {
 }
 
 class AIClient {
-  constructor({ getApiKey, fetchImpl = globalThis.fetch }) {
+  constructor({ getApiKey, getSelection = () => ({ provider: "openai", model: OPENAI_MODEL }), fetchImpl = globalThis.fetch }) {
+    this.getSelection = getSelection;
     this.getApiKey = getApiKey;
     this.fetchImpl = fetchImpl;
   }
@@ -945,94 +947,60 @@ class AIClient {
   }
 
   async #run(mode, payload) {
-    const attempts = [];
-    const openAIKey = this.getApiKey("openai");
-    const geminiKey = this.getApiKey("gemini");
-    if (openAIKey) {
-      attempts.push({
-        provider: "openai",
-        run: () =>
-          mode === "chat"
-            ? this.#callOpenAIChat(openAIKey, payload)
-            : this.#callOpenAI(openAIKey, mode, payload)
-      });
+    // 요청 시작 시 저장된 선택을 고정한다. 다른 공급자의 키는 조회하지 않는다.
+    const { provider, model } = this.getSelection();
+    const entry = Object.hasOwn(modelCatalog, provider) && modelCatalog[provider].find((item) => item.id === model);
+    if (!entry) {
+      const error = new Error("저장된 AI 모델을 사용할 수 없어요. 설정에서 모델을 직접 선택해 주세요.");
+      error.code = "INVALID_AI_SELECTION";
+      throw error;
     }
-    if (geminiKey) {
-      attempts.push({
-        provider: "gemini",
-        run: () =>
-          mode === "chat"
-            ? this.#callGeminiChat(geminiKey, payload)
-            : this.#callGemini(geminiKey, mode, payload)
-      });
-    }
-    if (attempts.length === 0) {
-      const error = new Error("설정에서 OpenAI 또는 Gemini API 키를 한 번만 입력해 주세요.");
+    if (payload.signal?.aborted) throw createCancelledError();
+    const apiKey = this.getApiKey(provider);
+    if (!apiKey) {
+      const name = provider === "openai" ? "OpenAI" : "Gemini";
+      const error = new Error(`선택한 모델(${entry.label})을 사용하려면 설정에서 ${name} API 키를 입력해 주세요.`);
       error.code = "NO_API_KEY";
       throw error;
     }
-
-    const failures = [];
-    const finish = (result, provider) => ({
-      ...result,
-      provider,
-      model: provider === "openai" ? OPENAI_MODEL : GEMINI_MODEL,
-      fallbackUsed: failures.length > 0,
-      externalGrounding: mode === "chat" && result?.externalGrounding === true
-    });
-    for (const attempt of attempts) {
-      if (payload.signal?.aborted) throw createCancelledError();
-      payload.onProgress?.({
-        stage: failures.length > 0 ? "fallback" : "requesting",
-        provider: attempt.provider,
-        searchPolicy: payload.searchPolicy || "none"
-      });
-      try {
-        let result = await attempt.run();
-        if (mode === "chat") {
-          result = applyGroundingPolicy(result, {
-            screenContext: payload.screenContext,
-            priorExternalContext: payload.priorExternalContext
-          });
-          // 이미 화면에 흘려 보낸 답변이므로 출처가 없어도 다른 AI로 다시 묻지 않고 표시만 남긴다.
-          if (payload.searchRequired && !hasWebSources(result)) {
-            result = { ...result, sourcesMissing: true };
-          }
-        }
-        return finish(result, attempt.provider);
-      } catch (error) {
-        if (error?.code === "CANCELLED") throw error;
-        failures.push(`${attempt.provider}: ${error.message}`);
-        if (mode === "chat" && payload.screenContext) {
-          const screenError = new Error(
-            "현재 화면을 안전하게 확인하지 못했습니다. 화면은 저장하지 않았으니 다시 촬영해 주세요."
-          );
-          screenError.code = "SCREEN_CONTEXT_UNAVAILABLE";
-          throw screenError;
-        }
-        // 사이드 채팅의 화면처럼, 화면에서 잘라 낸 이미지도 다른 AI에 다시 보내지 않는다.
-        if (mode === "readText") {
-          const readError = new Error(
-            "화면의 글을 읽지 못했어요. 이미지는 저장하지 않았으니 다시 캡처해 주세요."
-          );
-          readError.code = "IMAGE_TEXT_UNAVAILABLE";
-          throw readError;
-        }
+    payload.onProgress?.({ stage: "requesting", provider, searchPolicy: payload.searchPolicy || "none" });
+    try {
+      let result;
+      if (provider === "openai") {
+        result = mode === "chat"
+          ? await this.#callOpenAIChat(apiKey, model, payload)
+          : await this.#callOpenAI(apiKey, model, mode, payload);
+      } else {
+        result = mode === "chat"
+          ? await this.#callGeminiChat(apiKey, model, payload)
+          : await this.#callGemini(apiKey, model, mode, payload);
       }
+      if (mode === "chat") {
+        result = applyGroundingPolicy(result, {
+          screenContext: payload.screenContext,
+          priorExternalContext: payload.priorExternalContext
+        });
+        if (payload.searchRequired && !hasWebSources(result)) result = { ...result, sourcesMissing: true };
+      }
+      return { ...result, provider, model, fallbackUsed: false, externalGrounding: mode === "chat" && result?.externalGrounding === true };
+    } catch (cause) {
+      if (cause?.code === "CANCELLED" || cause?.code === "GEMINI_REQUEST_TOO_LARGE") throw cause;
+      const status = Number(cause?.status);
+      const hint = status === 429 ? "요청 한도 또는 잔액을 확인한 뒤 다시 시도해 주세요."
+        : [400, 401, 403, 404].includes(status) ? "설정에서 API 키와 모델 사용 권한을 확인해 주세요."
+        : "잠시 후 다시 시도하거나 설정에서 다른 모델을 직접 선택해 주세요.";
+      const screen = mode === "chat" && payload.screenContext;
+      const search = mode === "chat" && payload.searchRequired;
+      const reason = screen || mode === "readText" ? "화면을 읽지 못했어요. 이미지는 저장하지 않았어요."
+        : search ? "웹 검색 출처를 확인하지 못했어요." : "응답을 받지 못했어요.";
+      const error = new Error(`${entry.label}: ${reason} ${hint}`);
+      error.code = screen ? "SCREEN_CONTEXT_UNAVAILABLE" : mode === "readText" ? "IMAGE_TEXT_UNAVAILABLE"
+        : search ? "SEARCH_UNAVAILABLE" : "AI_UNAVAILABLE";
+      throw error;
     }
-    if (mode === "chat" && payload.searchRequired) {
-      const searchError = new Error(
-        "웹 검색 출처를 확인하지 못했습니다. 잠시 후 다시 검색해 주세요."
-      );
-      searchError.code = "SEARCH_UNAVAILABLE";
-      throw searchError;
-    }
-    const error = new Error(`AI 연결에 실패했습니다. ${failures.join(" / ")}`);
-    error.code = "AI_UNAVAILABLE";
-    throw error;
   }
 
-  async #callOpenAI(apiKey, mode, payload) {
+  async #callOpenAI(apiKey, model, mode, payload) {
     const spec = STRUCTURED_MODES[mode];
     const userContent = toOpenAIContent(spec.prompt(payload), payload.attachments);
     if (spec.imageDetail) {
@@ -1041,7 +1009,7 @@ class AIClient {
       }
     }
     const request = {
-      model: OPENAI_MODEL,
+      model,
       store: false,
       input: [
         {
@@ -1087,7 +1055,7 @@ class AIClient {
   }
 
   // 사이드 채팅: 일반 글 답변을 스트리밍으로 받고, 끝난 뒤 인용 위치와 검색 기록을 정리한다.
-  async #callOpenAIChat(apiKey, payload) {
+  async #callOpenAIChat(apiKey, model, payload) {
     const userContent = toOpenAIContent(buildSideChatPrompt(payload), payload.attachments);
     if (payload.screenContext) {
       for (const part of userContent) {
@@ -1095,7 +1063,7 @@ class AIClient {
       }
     }
     const request = {
-      model: OPENAI_MODEL,
+      model,
       store: false,
       stream: true,
       input: [
@@ -1171,7 +1139,7 @@ class AIClient {
     );
   }
 
-  async #callGeminiChat(apiKey, payload) {
+  async #callGeminiChat(apiKey, model, payload) {
     const request = {
       systemInstruction: { parts: [{ text: CHAT_SYSTEM_PROMPT }] },
       contents: [
@@ -1190,7 +1158,7 @@ class AIClient {
     let failure = "";
     await fetchEventStream(
       this.fetchImpl,
-      `${GEMINI_MODELS_URL}/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
+      `${GEMINI_MODELS_URL}/${model}:streamGenerateContent?alt=sse`,
       {
         method: "POST",
         headers: {
@@ -1205,9 +1173,7 @@ class AIClient {
       (chunk) => {
         if (chunk?.error) failure = chunk.error.message || "AI 응답 중 문제가 생겼습니다.";
         const candidate = chunk?.candidates?.[0];
-        const text = (candidate?.content?.parts ?? [])
-          .map((part) => (typeof part?.text === "string" && part.thought !== true ? part.text : ""))
-          .join("");
+        const text = extractGeminiText(chunk);
         if (text) {
           streamed += text;
           payload.onDelta?.(streamed);
@@ -1238,7 +1204,7 @@ class AIClient {
     );
   }
 
-  async #callGemini(apiKey, mode, payload) {
+  async #callGemini(apiKey, model, mode, payload) {
     const spec = STRUCTURED_MODES[mode];
     const request = {
       systemInstruction: {
@@ -1267,7 +1233,7 @@ class AIClient {
     }
     const response = await fetchJson(
       this.fetchImpl,
-      `${GEMINI_MODELS_URL}/${GEMINI_MODEL}:generateContent`,
+      `${GEMINI_MODELS_URL}/${model}:generateContent`,
       {
         method: "POST",
         headers: {

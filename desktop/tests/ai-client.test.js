@@ -5,6 +5,8 @@ const assert = require("node:assert/strict");
 
 const {
   AIClient,
+  OPENAI_MODEL,
+  GEMINI_MODEL,
   buildSideChatPrompt,
   buildUserPrompt,
   hasExplicitLengthDirective,
@@ -147,6 +149,7 @@ test("Gemini에도 화면 이미지와 PDF를 inlineData로 전달한다", async
     };
   };
   const client = new AIClient({
+    getSelection: () => ({ provider: "gemini", model: GEMINI_MODEL }),
     getApiKey: (provider) => (provider === "gemini" ? "test-key" : ""),
     fetchImpl
   });
@@ -331,7 +334,7 @@ test("사이드 채팅은 최근 20개·2만4천 자 안에서만 문맥을 재�
   assert.ok(context.length < 25_000);
 });
 
-test("OpenAI 실패 시 Gemini로 자동 대체하고 폐기된 생성 파라미터를 보내지 않는다", async () => {
+test("두 키가 있어도 OpenAI 실패 후 자동 재시도하지 않으며 직접 고른 Gemini만 호출한다", async () => {
   const requests = [];
   const fetchImpl = async (url, options) => {
     requests.push({ url, body: JSON.parse(options.body) });
@@ -366,15 +369,20 @@ test("OpenAI 실패 시 Gemini로 자동 대체하고 폐기된 생성 파라미
       })
     };
   };
+  let selection = { provider: "openai", model: OPENAI_MODEL };
   const client = new AIClient({
+    getSelection: () => selection,
     getApiKey: () => "test-key",
     fetchImpl
   });
 
+  await assert.rejects(client.enhance({ input: "회의 늦음 알려줘" }), { code: "AI_UNAVAILABLE" });
+  assert.equal(requests.length, 1);
+  selection = { provider: "gemini", model: GEMINI_MODEL };
   const result = await client.enhance({ input: "회의 늦음 알려줘" });
 
   assert.equal(result.provider, "gemini");
-  assert.equal(result.fallbackUsed, true);
+  assert.equal(result.fallbackUsed, false);
   assert.equal(requests.length, 2);
   assert.equal(requests[0].body.reasoning.effort, "low");
   assert.equal(requests[0].body.text.verbosity, "low");

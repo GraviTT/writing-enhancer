@@ -66,6 +66,9 @@ const elements = Object.fromEntries(
     "settingsPopupDragHandle",
     "settingsCloseButton",
     "settingsForm",
+    "providerOpenAI",
+    "providerGemini",
+    "aiModelSelect",
     "windowMode",
     "opacityInput",
     "opacityValue",
@@ -794,9 +797,31 @@ function settingsRangeLabels() {
   elements.fontScaleValue.value = `${elements.fontScaleInput.value}%`;
 }
 
+function formProvider() {
+  return elements.providerOpenAI.checked ? "openai" : elements.providerGemini.checked ? "gemini" : "";
+}
+
+function renderModelChoices() {
+  const provider = formProvider();
+  const models = state.settings?.modelCatalog?.[provider] || [];
+  const saved = state.modelChoices[provider];
+  const select = elements.aiModelSelect;
+  select.replaceChildren(...models.map(({ id, label }) => new Option(label, id)));
+  if (!models.some(({ id }) => id === saved)) {
+    select.prepend(new Option("사용할 모델을 선택해 주세요", ""));
+    select.value = "";
+  } else {
+    select.value = saved;
+  }
+}
+
 async function openSettings() {
   const settings = await api.getSettings();
   state.settings = settings;
+  state.modelChoices = { ...settings.aiModels };
+  elements.providerOpenAI.checked = settings.aiProvider === "openai";
+  elements.providerGemini.checked = settings.aiProvider === "gemini";
+  renderModelChoices();
   elements.openaiKey.value = "";
   elements.geminiKey.value = "";
   elements.openaiKey.placeholder = settings.hasOpenAIKey ? "저장된 키를 사용 중" : "sk-...";
@@ -1213,11 +1238,18 @@ elements.windowHeightInput.addEventListener("input", previewDisplaySettings);
 elements.windowMode.addEventListener("change", previewDisplaySettings);
 elements.copyOfferInput.addEventListener("change", previewDisplaySettings);
 elements.screenReadFallbackInput.addEventListener("change", previewDisplaySettings);
+elements.providerOpenAI.addEventListener("change", renderModelChoices);
+elements.providerGemini.addEventListener("change", renderModelChoices);
+elements.aiModelSelect.addEventListener("change", () => {
+  state.modelChoices[formProvider()] = elements.aiModelSelect.value;
+});
 elements.settingsForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   elements.settingsError.textContent = "";
   const response = await api.saveSettings({
     ...displaySettingsPayload(),
+    aiProvider: formProvider(),
+    aiModel: elements.aiModelSelect.value,
     updateShortcut: true,
     shortcut: elements.shortcutInput.value.trim(),
     selectionShortcut: elements.selectionShortcutInput.value.trim(),

@@ -1827,7 +1827,10 @@ async function initialize() {
   historyStore = new HistoryStore(path.join(userData, "history.json"));
   draftStore = new DraftStore(path.join(userData, "draft.json"));
   sideChatStore = new SideChatStore(path.join(userData, "side-chat.json"));
-  aiClient = new AIClient({ getApiKey: (provider) => configStore.getApiKey(provider) });
+  aiClient = new AIClient({
+    getApiKey: (provider) => configStore.getApiKey(provider),
+    getSelection: () => configStore.getAISelection()
+  });
   registerIpcHandlers();
   createWindow();
   screen.on("display-added", repositionForDisplayChange);

@@ -145,7 +145,7 @@ class OverlayService : Service() {
             getSharedPreferences(STATE_PREFS, MODE_PRIVATE)
                 .getString(STATE_LAST_PANEL_SURFACE, null),
         )
-        aiClient = AiClient(secureStore)
+        aiClient = AiClient(secureStore, preferences)
         workspaceStore.loadDraft().let { draft ->
             val draftAttachments = draft.attachments.filter { File(it.path).isFile }
             session.situation = draft.situation

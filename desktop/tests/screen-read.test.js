@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
-const { AIClient, buildTranslationPrompt } = require("../src/lib/ai-client");
+const { AIClient, GEMINI_MODEL, buildTranslationPrompt } = require("../src/lib/ai-client");
 const { imageCropRect, normalizeSelection } = require("../src/lib/screen-read");
 const { suggestsTranslation } = require("../src/renderer/text-language");
 const writingRules = require("../src/renderer/writing-rules");
@@ -133,6 +133,7 @@ test("화면 글 읽기는 이미지를 고해상도로 보내고, 실패해도 
 
 test("글자가 없는 이미지는 빈 글과 빈 언어로 돌려준다", async () => {
   const client = new AIClient({
+    getSelection: () => ({ provider: "gemini", model: GEMINI_MODEL }),
     getApiKey: (provider) => (provider === "gemini" ? "test-key" : ""),
     fetchImpl: async () => geminiResponse({ text: "", language: "ko", language_name: "한국어" })
   });
@@ -143,7 +144,7 @@ test("글자가 없는 이미지는 빈 글과 빈 언어로 돌려준다", asyn
   );
 });
 
-test("번역은 고른 언어와 상황을 지시문 틀에 넣고, 실패하면 다른 AI로 넘어간다", async () => {
+test("번역은 고른 언어와 상황을 지시문 틀에 넣고 선택한 AI에만 전송한다", async () => {
   assert.equal(
     buildTranslationPrompt({ input: " Thanks! ", targetLanguage: "ja", situation: "" }),
     "옮길 언어: 일본어\n상황: 없음\n\n번역할 글:\nThanks!"
@@ -153,6 +154,7 @@ test("번역은 고른 언어와 상황을 지시문 틀에 넣고, 실패하면
 
   const urls = [];
   const client = new AIClient({
+    getSelection: () => ({ provider: "gemini", model: GEMINI_MODEL }),
     getApiKey: () => "test-key",
     fetchImpl: async (url, options) => {
       urls.push(String(url));
@@ -166,7 +168,8 @@ test("번역은 고른 언어와 상황을 지시문 틀에 넣고, 실패하면
   const result = await client.translate({ input: "첨부 파일 확인 부탁드려요", targetLanguage: "en", situation: "업무 메일" });
   assert.equal(result.translatedText, "Please review the attached file.");
   assert.equal(result.provider, "gemini");
-  assert.equal(urls.length, 2);
+  assert.equal(urls.length, 1);
+  assert.ok(urls[0].includes(`/${GEMINI_MODEL}:generateContent`));
   await assert.rejects(client.translate({ input: "  " }), /번역할 글을 먼저/u);
 });
 
